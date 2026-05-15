@@ -30,3 +30,14 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# MockAgent
+# 用户实际配置文件（含密钥），永远不提交
+/config.json
+app/config.json
+
+# Wails 构建产物与前端依赖
+app/build/bin/
+app/frontend/node_modules/
+app/frontend/dist/
+app/frontend/wailsjs/

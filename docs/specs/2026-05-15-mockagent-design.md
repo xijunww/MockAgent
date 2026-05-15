@@ -248,7 +248,175 @@ type Message struct {
 - recorder 内部加锁，保证同一时刻只有一个录音流
 - LLM 流式响应通过 context 控制取消
 
-## 11. 第一版范围（YAGNI）
+## 11. 正确性属性
+
+*属性是系统所有有效执行下都应成立的特征或行为——一种关于系统"应该做什么"的形式化陈述，是人类可读规范与机器可验证正确性保证之间的桥梁。*
+
+下列属性来自需求验收准则的可测试性分析（见 `2026-05-15-mockagent-requirements.md` 与 prework 笔记）。每条属性均以"对所有 …"开头，并标注其验证的需求条目。属性测试至少运行 100 次随机迭代。
+
+### 属性 1：首次启动从示例配置拷贝
+
+**对任何** 仅包含 `config.example.json` 而不含 `config.json` 的目录与任意有效示例 JSON 内容 *e*，调用 `Config_Loader.Load(dir)` 之后，`config.json` 文件应存在且其字节序列等于 *e*。
+
+**Validates: Requirement 1.1**
+
+### 属性 2：文件值与环境变量合并的覆盖语义
+
+**对任何** 文件 Config *f* 与任意环境变量子集 *E*（仅含 `TENCENT_APP_ID`、`TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`、`MOCK_AGENT_HOTKEY`），令 *m = merge(f, E)*。则对每个被 *E* 设置的字段 *k*，*m[k]* 等于 *E[k]*；对未在 *E* 中设置的字段 *k*，*m[k]* 等于 *f[k]*。
+
+**Validates: Requirements 1.3, 1.4**
+
+### 属性 3：热键变更时重新注册
+
+**对任何** 旧 Hotkey_Spec *h₀* 与新 Hotkey_Spec *h₁*，在 `ReloadConfig()` 之后：当 *h₁ ≠ h₀* 时，Hotkey_Manager 应恰好执行一次 `unregister(h₀)` 与一次 `register(h₁)`；当 *h₁ = h₀* 时，不应有 `unregister` 或 `register` 调用。
+
+**Validates: Requirement 1.5**
+
+### 属性 4：重载不中断进行中的录音与流
+
+**对任何** 在 Recording_Session 或 LLM_Stream 进行中执行的 `ReloadConfig()` 调用，调用前后该 Session/Stream 的活跃状态与已累积内容应保持不变。
+
+**Validates: Requirement 1.6**
+
+### 属性 5：敏感字段不泄露
+
+**对任何** 包含非平凡密钥值（`secret_id`、`secret_key`、`api_key`）的 Config 实例 *c*，对 `c.String()`、`GetConfig()` 返回结构的字符串化、Config_Loader/ASR_Client/LLM_Client 任一错误返回值与日志输出做子串搜索，结果中均不应包含 *c.secret_id*、*c.secret_key*、*c.api_key* 的明文值。
+
+**Validates: Requirements 1.8, 10.4**
+
+### 属性 6：热键事件去重器
+
+**对任何** Hotkey_Spec 的按下/松开事件序列 *S*，去重器输出的"开始录音"事件应正好与 *S* 中第一次按下对齐，"停止录音"事件应正好与 *S* 中最后一次松开对齐；其间所有重复按下/松开都不产生新的开始/停止。
+
+**Validates: Requirement 2.4**
+
+### 属性 7：Hotkey_Spec 解析与可逆性
+
+**对任何** 由合法生成器产出的 Hotkey_Spec 字符串 *s*，`parse(s)` 应成功且 `format(parse(s))` 应与 *s* 在大小写归一化后相等；**对任何** 由非法生成器产出的字符串 *s'*（包含未知键名、空字符串、单独修饰键等），`parse(s')` 应返回错误。
+
+**Validates: Requirements 2.6, 2.7**
+
+### 属性 8：录音缓冲不丢字节
+
+**对任何** 通过伪音频回调注入到 Recorder 的字节序列 *b*（按 16kHz、单声道、16-bit 写入），`Recorder.Stop()` 返回的 PCM_Buffer 应等于 *b*。
+
+**Validates: Requirement 3.4**
+
+### 属性 9：单录音流不变量
+
+**对任何** 由 `Start` 与 `Stop` 操作组成的事件序列 *O*，在每个时刻 Recorder 的活跃 Recording_Session 数量都应 ≤ 1，且对处于 Recording 状态时收到的 `Start` 调用，状态保持不变且调用返回失败。
+
+**Validates: Requirement 3.8**
+
+### 属性 10：录音时长阈值判定
+
+**对任何** 字节长度 *n* 与配置 `(sample_rate, channels, bytes_per_sample, min_duration_ms)`，`shouldRecognize(n, …)` 的返回值应等于 `(n / (sample_rate * channels * bytes_per_sample)) * 1000 ≥ min_duration_ms`。
+
+**Validates: Requirement 3.9**
+
+### 属性 11：ASR 空白结果不回填
+
+**对任何** ASR 文本结果 *t*，`dispatchASRResult(t)` 是否把 *t* 写入输入框，应等价于 *t* 含有至少一个非空白字符。
+
+**Validates: Requirement 4.6**
+
+### 属性 12：新一轮按下取消上一轮 ASR
+
+**对任何** 由 Press/Release/ASRComplete 三类事件构成的有限序列，输入框被回填的文本所属 Recording_Session *s* 应满足：在 *s* 的 ASRComplete 之前未出现新的 Press；若出现新 Press，则 *s* 的结果不应回填到输入框。
+
+**Validates: Requirement 4.8**
+
+### 属性 13：LLM 请求构造的不变量
+
+**对任何** Config *c* 与 messages 数组 *M*，LLM_Client 发出的 HTTP 请求 *r* 应满足：`r.URL == c.deepseek.base_url + "/chat/completions"`；`r.Header["Authorization"] == "Bearer " + c.deepseek.api_key`；`r.Body.model == c.deepseek.model`；`r.Body.stream == true`；`r.Body.messages` 在 JSON 反序列化后等于 *M*。
+
+**Validates: Requirements 5.2, 5.3**
+
+### 属性 14：SSE 解析的连接律与累积
+
+**对任何** OpenAI 风格 chunk 数组 *C* 序列化为 SSE 流并以 `[DONE]` 结尾，LLM_Client 解析后通过 `llm-delta` 推送的 `content` 增量按顺序拼接结果，应等于 *C* 中所有 `choices[0].delta.content` 拼接；`reasoning` 增量同理。`llm-done` 事件的 `full_content` 与 Conversation_Store 中最后一条 assistant Message 的 `content` 都应等于该拼接结果。
+
+**Validates: Requirements 5.5, 5.6, 5.7**
+
+### 属性 15：4xx 错误不污染会话
+
+**对任何** 4xx 状态响应 *r* 与请求前会话 *M*，调用 `SendMessage` 之后 Conversation_Store 的状态应等于"在 *M* 末尾追加用户消息"，即不应追加 assistant Message；同时应有一次 `llm-error` 事件被发送。
+
+**Validates: Requirement 5.9**
+
+### 属性 16：单 LLM 流不变量
+
+**对任何** 由 `SendMessage`、`StreamComplete`、`StopGeneration` 操作组成的事件序列，在每个时刻活跃的 LLM_Stream 数量都应 ≤ 1，且当存在活跃流时收到的 `SendMessage` 调用应返回错误且不创建新流。
+
+**Validates: Requirement 5.11**
+
+### 属性 17：NewConversation 重置
+
+**对任何** System_Prompt *p* 与任意已存在的 messages 列表 *M*，`NewConversation()` 之后 Conversation_Store 的 messages 应等于：当 *p* 为空时为空列表；当 *p* 非空时为 `[{role:"system", content:p}]`。
+
+**Validates: Requirement 6.1**
+
+### 属性 18：会话顺序保留
+
+**对任何** 由 (role, content) 二元组组成的追加操作序列 *A*，Conversation_Store 在序列结束后的 messages 顺序应与 *A* 中追加顺序逐项一致。
+
+**Validates: Requirement 6.2**
+
+### 属性 19：导出默认文件名格式
+
+**对任何** 时间 *t* 与格式 *f ∈ {"md", "json"}*，`generateExportFilename(t, f)` 的返回字符串应匹配正则 `^MockAgent-对话-\d{4}-\d{2}-\d{2}-\d{4}\.(md|json)$` 且后缀等于 *f*。
+
+**Validates: Requirements 7.1, 7.2**
+
+### 属性 20：Markdown 导出结构保真
+
+**对任何** messages 列表 *M*，导出的 Markdown 字符串 *s* 应满足：*s* 中 `## 你` 出现次数等于 *M* 中 user Message 数；`## AI` 出现次数等于 assistant Message 数；对每条 assistant Message 中的三反引号代码块，*s* 应原样包含其原始字符串。
+
+**Validates: Requirement 7.4**
+
+### 属性 21：JSON 导出往返一致
+
+**对任何** messages 列表 *M*，对 *M* 调用 `ExportConversation("json", path)` 后再用 `json.Unmarshal` 读回得到的列表 *M'* 应满足 *M' = M*（顺序与所有字段，含 `reasoning_content`，逐项相等）。
+
+**Validates: Requirements 7.5, 7.7**
+
+### 属性 22：非法导出格式被拒绝
+
+**对任何** 不属于 `{"md", "json"}` 的字符串 *f*，`ExportConversation(f, path)` 应返回错误且不创建文件、不弹出保存对话框。
+
+**Validates: Requirement 7.6**
+
+### 属性 23：代码块复制保真
+
+**对任何** assistant Message 中的代码块字符串 *k*（含任意缩进、空白与换行），渲染并点击该代码块的"复制"按钮后，系统剪贴板内容应严格等于 *k*。
+
+**Validates: Requirement 8.3**
+
+### 属性 24：输入框高度上限
+
+**对任何** 输入框中行数 *n*，输入框可视高度应等于 `min(n, 6) * lineHeight`，且当 *n > 6* 时输入框内部出现纵向滚动条。
+
+**Validates: Requirement 8.8**
+
+### 属性 25：流式渲染时滚动贴底保持
+
+**对任何** 滚动状态 *s*（贴底/非贴底）与 `llm-delta` 事件 *d*，事件处理后：若 *s* 为贴底则处理后仍为贴底；若 *s* 为非贴底则不应被强制贴底。
+
+**Validates: Requirement 8.5**
+
+### 属性 26：关闭主窗口后热键仍就绪
+
+**对任何** "关闭主窗口 → 按下 Hotkey_Spec → 松开 Hotkey_Spec" 事件序列，OnPress 与 OnRelease 回调仍应分别被触发恰好一次，且主进程未退出。
+
+**Validates: Requirement 9.3**
+
+### 属性 27：缺凭证时拒绝外部调用
+
+**对任何** 用户输入 *t* 与缺失任一密钥字段的 Config *c*：当 `c.deepseek.api_key == ""` 时 `SendMessage(t)` 应返回错误且 LLM_Client 不发起 HTTP 请求；当 `c.tencent.app_id`、`c.tencent.secret_id`、`c.tencent.secret_key` 任一为空时，OnPress 路径不应调用 ASR_Client。
+
+**Validates: Requirements 10.1, 10.2**
+
+## 12. 第一版范围（YAGNI）
 
 **包含：**
 - 全局热键 F2 录音 → ASR → 输入框 → 发送 → DeepSeek 流式回答
@@ -264,7 +432,7 @@ type Message struct {
 - 设置面板 GUI（修改通过编辑 `config.json` + ReloadConfig）
 - 多会话导入恢复（JSON 导出格式预留兼容，但本版不实现导入）
 
-## 12. 未来可扩展点
+## 13. 未来可扩展点
 
 - 升级到实时流式 ASR（SpeechRecognizer）做"边说边出字"
 - 多会话历史持久化与切换

@@ -1,0 +1,21 @@
+{
+  "tencent": {
+    "app_id": "",
+    "secret_id": "",
+    "secret_key": ""
+  },
+  "deepseek": {
+    "api_key": "",
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-v4-pro",
+    "thinking": "enabled",
+    "reasoning_effort": "medium",
+    "system_prompt": "You are a helpful assistant."
+  },
+  "hotkey": "F2",
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "min_duration_ms": 300
+  }
+}
