@@ -1,12 +1,48 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8"/>
-    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-    <title>MockAgent</title>
+  <meta charset="UTF-8"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <title>MockAgent</title>
 </head>
 <body>
-<div id="app"></div>
-<script src="./src/main.js" type="module"></script>
+  <div id="app">
+    <header class="title-bar">
+      <div class="title">MockAgent</div>
+      <div class="title-actions">
+        <button id="btn-export" class="icon-btn" title="导出对话">📥</button>
+        <button id="btn-config" class="icon-btn" title="打开配置文件">⚙</button>
+        <button id="btn-reload" class="icon-btn" title="重载配置">🔄</button>
+        <button id="btn-new" class="icon-btn" title="新建对话">🗑</button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner hidden"></div>
+
+    <main id="chat-list" class="chat-list">
+      <div class="welcome">
+        按住快捷键 <kbd id="kbd-hotkey">F2</kbd> 录音并转文字，或在输入框按住 🎤 按钮。
+      </div>
+    </main>
+
+    <div id="recording-status" class="recording-status idle">
+      <span id="status-icon">🎤</span>
+      <span id="status-text">按 <kbd class="inline-kbd" id="status-hotkey">F2</kbd> 录音</span>
+    </div>
+
+    <footer class="composer">
+      <textarea id="input" rows="1" placeholder="输入消息或按住快捷键录音..."></textarea>
+      <button id="btn-mic" class="composer-btn mic-btn" title="按住录音"
+              aria-label="按住录音">🎤</button>
+      <button id="btn-send" class="composer-btn send-btn">发送</button>
+    </footer>
+
+    <div id="export-menu" class="export-menu hidden">
+      <button data-format="md">Markdown (.md)</button>
+      <button data-format="json">JSON (.json)</button>
+    </div>
+  </div>
+
+  <script src="./src/main.js" type="module"></script>
 </body>
 </html>
