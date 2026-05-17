@@ -25,37 +25,47 @@ import (
 
 // 事件名常量。前端订阅与后端发出共同使用。
 const (
-	EventRecordingStarted = "recording-started"
-	EventRecordingStopped = "recording-stopped"
-	EventASRProgress      = "asr-progress"
-	EventASRResult        = "asr-result"
-	EventASRError         = "asr-error"
-	EventASRNotice        = "asr-notice" // 提示性事件（录音过短 / 识别为空 / 缺凭证等）
-	EventLLMDelta         = "llm-delta"
-	EventLLMDone          = "llm-done"
-	EventLLMError         = "llm-error"
+	EventRecordingStarted    = "recording-started"
+	EventRecordingStopped    = "recording-stopped"
+	EventASRProgress         = "asr-progress"
+	EventASRResult           = "asr-result"
+	EventASRError            = "asr-error"
+	EventASRNotice           = "asr-notice" // 提示性事件
+	EventLLMDelta            = "llm-delta"
+	EventLLMDone             = "llm-done"
+	EventLLMError            = "llm-error"
 	EventConversationCleared = "conversation-cleared"
-	EventConfigStatus     = "config-status" // 配置状态（如缺凭证、热键注册失败、JSON 解析错等）
+	EventConfigStatus        = "config-status"
+	EventSendHotkeyPressed   = "send-hotkey-pressed" // 发送热键被按下；前端读输入框并调用 SendMessage
+	EventHotkeyChanged       = "hotkey-changed"      // 热键修改成功后通知前端刷新展示
+)
+
+// HotkeyKind 区分录音热键与发送热键。
+const (
+	HotkeyKindRecord = "record"
+	HotkeyKindSend   = "send"
 )
 
 // App 是 Wails 后端协调器。
 type App struct {
-	ctx      context.Context
-	cfgDir   string
-	cfgMu    sync.RWMutex
-	cfg      *config.Config
-	loadErr  error // 启动时配置加载失败的错误（在前端首次 GetConfig / 发送时返回）
+	ctx     context.Context
+	cfgDir  string
+	cfgMu   sync.RWMutex
+	cfg     *config.Config
+	loadErr error // 启动时配置加载失败的错误（在前端首次 GetConfig / 发送时返回）
 
 	// 各子模块。
-	hotkeyMgr *hotkey.Manager
-	rec       recorder.Recorder
-	asrCli    asr.Client
-	llmCli    *llm.Client
-	store     *conversation.Store
-	trayMgr   *tray.Manager
+	recordHotkey *hotkey.Manager // 按住录音的全局热键
+	sendHotkey   *hotkey.Manager // 一键发送的全局热键
+	rec          recorder.Recorder
+	asrCli       asr.Client
+	llmCli       *llm.Client
+	store        *conversation.Store
+	trayMgr      *tray.Manager
 
 	// 录音 / ASR 状态。
-	asrSession atomic.Int64 // 当前 ASR session id；新一轮 Press 自增以丢弃旧结果
+	asrSession atomic.Int64    // 当前 ASR session id；新一轮 Press 自增以丢弃旧结果
+	recording  atomic.Bool     // 当前是否处于录音中（用于发送热键的拒绝逻辑）
 
 	// LLM 流并发控制。
 	llmMu     sync.Mutex
@@ -84,8 +94,9 @@ func (a *App) startup(ctx context.Context) {
 	// Recorder 设备探测（异步，不阻塞启动）。
 	go a.probeMicrophone()
 
-	// 注册热键（用配置中的 Hotkey）。失败不致命。
-	a.hotkeyMgr = hotkey.NewManager(a.onHotkeyPress, a.onHotkeyRelease)
+	// 注册热键。失败不致命，UI 内的 🎤 按钮仍可用。
+	a.recordHotkey = hotkey.NewManager(a.onHotkeyPress, a.onHotkeyRelease)
+	a.sendHotkey = hotkey.NewManager(a.onSendHotkey, nil)
 	a.applyHotkeyConfig()
 
 	// 初始化 ASR/LLM 客户端（基于当前配置）。
@@ -112,8 +123,11 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.trayMgr != nil {
 		a.trayMgr.Stop()
 	}
-	if a.hotkeyMgr != nil {
-		_ = a.hotkeyMgr.Unregister()
+	if a.recordHotkey != nil {
+		_ = a.recordHotkey.Unregister()
+	}
+	if a.sendHotkey != nil {
+		_ = a.sendHotkey.Unregister()
 	}
 	if a.rec != nil {
 		_ = a.rec.Close()
@@ -218,23 +232,39 @@ func (a *App) rebuildClients() {
 	}
 }
 
+// applyHotkeyConfig 把当前 Config 中的两个热键应用到对应 Manager。
+//
+// 任一热键解析或注册失败都会通过 EventConfigStatus 通知前端，但不会阻止
+// 应用继续运行（用户仍可用 UI 按钮录音 / 鼠标点发送按钮）。
 func (a *App) applyHotkeyConfig() {
 	cfg := a.currentConfig()
 	if cfg == nil {
 		return
 	}
-	spec, err := hotkey.ParseSpec(cfg.Hotkey)
+	a.applySingleHotkey(a.recordHotkey, cfg.RecordHotkey, "录音")
+	a.applySingleHotkey(a.sendHotkey, cfg.SendHotkey, "发送")
+}
+
+func (a *App) applySingleHotkey(mgr *hotkey.Manager, raw, label string) {
+	if mgr == nil {
+		return
+	}
+	if strings.TrimSpace(raw) == "" {
+		_ = mgr.Unregister()
+		return
+	}
+	spec, err := hotkey.ParseSpec(raw)
 	if err != nil {
 		a.emit(EventConfigStatus, map[string]any{
 			"ok":    false,
-			"error": fmt.Sprintf("快捷键 %q 解析失败: %v", cfg.Hotkey, err),
+			"error": fmt.Sprintf("%s热键 %q 解析失败: %v", label, raw, err),
 		})
 		return
 	}
-	if err := a.hotkeyMgr.Register(spec); err != nil {
+	if err := mgr.Register(spec); err != nil {
 		a.emit(EventConfigStatus, map[string]any{
 			"ok":    false,
-			"error": fmt.Sprintf("注册全局热键 %s 失败: %v（仍可用 UI 按钮录音）", spec, err),
+			"error": fmt.Sprintf("注册%s热键 %s 失败: %v", label, spec, err),
 		})
 	}
 }
@@ -268,6 +298,16 @@ func (a *App) onHotkeyRelease() {
 	a.stopRecording()
 }
 
+// onSendHotkey 由发送热键的 Press 触发；只通知前端，前端读输入框内容并调用 SendMessage。
+func (a *App) onSendHotkey() {
+	defer a.recoverPanic("hotkey-send")
+	if a.recording.Load() {
+		// 录音进行中拒绝发送，避免抢占
+		return
+	}
+	a.emit(EventSendHotkeyPressed, nil)
+}
+
 // SimulatePress / SimulateRelease 由前端 🎤 按钮调用，行为与全局热键完全一致。
 func (a *App) SimulatePress()   { a.onHotkeyPress() }
 func (a *App) SimulateRelease() { a.onHotkeyRelease() }
@@ -287,11 +327,13 @@ func (a *App) startRecording() {
 		a.emit(EventASRError, map[string]any{"error": fmt.Sprintf("麦克风启动失败: %v", err)})
 		return
 	}
+	a.recording.Store(true)
 	a.emit(EventRecordingStarted, nil)
 }
 
 func (a *App) stopRecording() {
 	pcm, err := a.rec.Stop()
+	a.recording.Store(false)
 	a.emit(EventRecordingStopped, nil)
 	if err != nil {
 		// Stop 失败但前端已收到 stopped；不再继续 ASR。
@@ -312,8 +354,6 @@ func (a *App) stopRecording() {
 	}
 
 	// 只在通过最小时长校验后才推进 sessionID。
-	// 这样幽灵的快速 press/release（hotkey 库消息队列残留）
-	// 不会废掉前一次还在进行中的真实 ASR。
 	sessionID := a.asrSession.Add(1)
 	go a.runASR(sessionID, pcm)
 }
@@ -355,6 +395,8 @@ func (a *App) runASR(sessionID int64, pcm []byte) {
 // ----- LLM 流式对话 -----
 
 // SendMessage 由前端调用，触发一次完整的 LLM 流式响应。
+//
+// 拒绝条件：配置未加载 / 文本为空 / DeepSeek 未配置 / 已有进行中的回答 / 正在录音。
 func (a *App) SendMessage(text string) error {
 	defer a.recoverPanic("send-message")
 	cfg := a.currentConfig()
@@ -366,6 +408,9 @@ func (a *App) SendMessage(text string) error {
 	}
 	if strings.TrimSpace(cfg.DeepSeek.APIKey) == "" {
 		return errors.New("DeepSeek API Key 未配置")
+	}
+	if a.recording.Load() {
+		return errors.New("正在录音中，请先松开录音键")
 	}
 
 	a.llmMu.Lock()
@@ -500,7 +545,8 @@ func (a *App) GetConfig() map[string]any {
 		return out
 	}
 	v := cfg.MaskedView()
-	out["hotkey"] = v.Hotkey
+	out["record_hotkey"] = v.RecordHotkey
+	out["send_hotkey"] = v.SendHotkey
 	out["model"] = v.DeepSeek.Model
 	out["base_url"] = v.DeepSeek.BaseURL
 	out["thinking"] = v.DeepSeek.Thinking
@@ -514,6 +560,92 @@ func (a *App) GetConfig() map[string]any {
 	out["audio"] = v.Audio
 	out["source"] = cfg.SourcePath()
 	return out
+}
+
+// UpdateHotkey 修改并持久化指定 kind 的热键。
+//
+// kind: HotkeyKindRecord 或 HotkeyKindSend；
+// raw:  快捷键字符串（如 "F2" / "Ctrl+Alt+Space"）。
+//
+// 流程：解析 raw → 检查是否与另一个热键冲突 → 写回 config.json →
+// 重新注册对应 hotkey 的 Manager → 通过 EventHotkeyChanged 通知前端。
+func (a *App) UpdateHotkey(kind, raw string) error {
+	defer a.recoverPanic("update-hotkey")
+
+	switch kind {
+	case HotkeyKindRecord, HotkeyKindSend:
+	default:
+		return fmt.Errorf("未知的热键种类 %q", kind)
+	}
+
+	if strings.TrimSpace(raw) == "" {
+		return errors.New("快捷键不能为空")
+	}
+
+	a.cfgMu.Lock()
+	if a.cfg == nil {
+		a.cfgMu.Unlock()
+		return errors.New("配置未加载，无法保存")
+	}
+	cfg := *a.cfg
+	a.cfgMu.Unlock()
+
+	if err := validateHotkeyChange(&cfg, kind, raw); err != nil {
+		return err
+	}
+
+	switch kind {
+	case HotkeyKindRecord:
+		cfg.RecordHotkey = raw
+	case HotkeyKindSend:
+		cfg.SendHotkey = raw
+	}
+
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+
+	a.cfgMu.Lock()
+	a.cfg = &cfg
+	a.cfgMu.Unlock()
+
+	a.applyHotkeyConfig()
+	a.emit(EventHotkeyChanged, map[string]any{
+		"record_hotkey": cfg.RecordHotkey,
+		"send_hotkey":   cfg.SendHotkey,
+	})
+	return nil
+}
+
+// validateHotkeyChange 校验新热键格式合法且不与另一个热键冲突。
+//
+// 抽成纯函数便于测试：传入 cfg 表示当前配置（不会修改），kind/raw 是请求。
+func validateHotkeyChange(cfg *config.Config, kind, raw string) error {
+	newSpec, err := hotkey.ParseSpec(raw)
+	if err != nil {
+		return fmt.Errorf("快捷键 %q 解析失败: %v", raw, err)
+	}
+	var otherRaw string
+	switch kind {
+	case HotkeyKindRecord:
+		otherRaw = cfg.SendHotkey
+	case HotkeyKindSend:
+		otherRaw = cfg.RecordHotkey
+	default:
+		return fmt.Errorf("未知热键种类 %q", kind)
+	}
+	if strings.TrimSpace(otherRaw) == "" {
+		return nil
+	}
+	otherSpec, err := hotkey.ParseSpec(otherRaw)
+	if err != nil {
+		// 现存的另一个热键解析不出来——不视为冲突，让用户至少能改这个
+		return nil
+	}
+	if newSpec.Equal(otherSpec) {
+		return fmt.Errorf("快捷键 %s 已被另一个热键使用", newSpec)
+	}
+	return nil
 }
 
 // OpenConfigFile 打开 config.json 让用户编辑。

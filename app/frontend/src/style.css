@@ -350,3 +350,129 @@ html, body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4150; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+
+/* ===== 通用弹出菜单（导出 / 配置） ===== */
+.popup-menu {
+  position: absolute;
+  top: 42px;
+  right: 16px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+}
+.popup-menu.hidden { display: none; }
+.popup-menu button {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.popup-menu button:hover { background: var(--bg-elev); }
+.menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+.menu-kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.config-menu {
+  /* 旧引用兼容：现在用 popup-menu */
+}
+
+#export-menu { right: 100px; }
+#config-menu { right: 60px; }
+
+/* ===== 修改快捷键的弹窗 ===== */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal.hidden { display: none; }
+.modal-card {
+  width: 360px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px 16px 20px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+.modal-card h3 {
+  margin: 0 0 8px 0;
+  font-size: 15px;
+  color: var(--text);
+}
+.modal-hint {
+  margin: 0 0 10px 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.modal-hint.small { font-size: 11px; margin-top: 8px; }
+.modal-error {
+  margin: 8px 0 0 0;
+  color: #fca5a5;
+  font-size: 12px;
+}
+.modal-error.hidden { display: none; }
+.hotkey-capture {
+  background: var(--bg);
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 22px 12px;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 16px;
+  color: var(--text);
+  cursor: text;
+  outline: none;
+  user-select: none;
+}
+.hotkey-capture:focus,
+.hotkey-capture.active {
+  border-color: var(--user-bubble);
+  background: rgba(37, 99, 235, 0.08);
+}
+.modal-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.btn-secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.btn-secondary:hover { background: var(--bg-elev); }

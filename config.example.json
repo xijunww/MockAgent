@@ -12,7 +12,8 @@
     "reasoning_effort": "medium",
     "system_prompt": "You are a helpful assistant."
   },
-  "hotkey": "F2",
+  "record_hotkey": "F2",
+  "send_hotkey": "F4",
   "audio": {
     "sample_rate": 16000,
     "channels": 1,

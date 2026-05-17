@@ -11,8 +11,7 @@
       <div class="title">MockAgent</div>
       <div class="title-actions">
         <button id="btn-export" class="icon-btn" title="导出对话">📥</button>
-        <button id="btn-config" class="icon-btn" title="打开配置文件">⚙</button>
-        <button id="btn-reload" class="icon-btn" title="重载配置">🔄</button>
+        <button id="btn-config" class="icon-btn" title="配置菜单">⚙</button>
         <button id="btn-new" class="icon-btn" title="新建对话">🗑</button>
       </div>
     </header>
@@ -21,7 +20,8 @@
 
     <main id="chat-list" class="chat-list">
       <div class="welcome">
-        按住快捷键 <kbd id="kbd-hotkey">F2</kbd> 录音并转文字，或在输入框按住 🎤 按钮。
+        按住快捷键 <kbd id="kbd-hotkey">F2</kbd> 录音并转文字，或在输入框按住 🎤 按钮。<br>
+        按 <kbd id="kbd-send-hotkey">F4</kbd> 直接发送当前输入框内容。
       </div>
     </main>
 
@@ -37,9 +37,31 @@
       <button id="btn-send" class="composer-btn send-btn">发送</button>
     </footer>
 
-    <div id="export-menu" class="export-menu hidden">
+    <div id="export-menu" class="popup-menu hidden">
       <button data-format="md">Markdown (.md)</button>
       <button data-format="json">JSON (.json)</button>
+    </div>
+
+    <div id="config-menu" class="popup-menu hidden">
+      <button data-action="edit-record-hotkey">修改录音热键 <span id="menu-record-hotkey" class="menu-kbd">F2</span></button>
+      <button data-action="edit-send-hotkey">修改发送热键 <span id="menu-send-hotkey" class="menu-kbd">F4</span></button>
+      <div class="menu-sep"></div>
+      <button data-action="open-config">打开配置文件</button>
+      <button data-action="reload-config">重载配置</button>
+    </div>
+
+    <div id="hotkey-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card">
+        <h3 id="hotkey-modal-title">设置快捷键</h3>
+        <p class="modal-hint">请按下你想要的快捷键。</p>
+        <div id="hotkey-capture" class="hotkey-capture" tabindex="0">点击此处后按键</div>
+        <p id="hotkey-error" class="modal-error hidden"></p>
+        <p class="modal-hint small">支持 F1–F12 / Space / 字母 / 数字，可加 Ctrl / Alt / Shift / Win 修饰键。按 Esc 取消。</p>
+        <div class="modal-actions">
+          <button id="hotkey-clear" class="btn-secondary">清除</button>
+          <button id="hotkey-cancel" class="btn-secondary">取消</button>
+        </div>
+      </div>
     </div>
   </div>
 
