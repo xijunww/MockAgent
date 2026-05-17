@@ -112,10 +112,11 @@ func (a *App) startup(ctx context.Context) {
 	a.trayMgr.Start()
 }
 
-// beforeClose 在主窗口关闭前调用：返回 true 阻止关闭并隐藏到托盘。
+// beforeClose 在主窗口关闭前调用。
+// 返回 false 让 Wails 正常关闭（触发 OnShutdown，进而注销热键等）。
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
-	rt.WindowHide(ctx)
-	return true
+	_ = ctx
+	return false
 }
 
 // shutdown 在 Wails 退出前调用（OnShutdown 钩子）。
