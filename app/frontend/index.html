@@ -28,6 +28,7 @@
     <div id="recording-status" class="recording-status idle">
       <span id="status-icon">🎤</span>
       <span id="status-text">按 <kbd class="inline-kbd" id="status-hotkey">F2</kbd> 录音</span>
+      <span id="docs-badge" class="docs-badge hidden" title="管理参考文档"></span>
     </div>
 
     <footer class="composer">
@@ -46,10 +47,14 @@
       <button data-action="edit-record-hotkey">修改录音热键 <span id="menu-record-hotkey" class="menu-kbd">F2</span></button>
       <button data-action="edit-send-hotkey">修改发送热键 <span id="menu-send-hotkey" class="menu-kbd">F4</span></button>
       <div class="menu-sep"></div>
+      <button data-action="edit-system-prompt">修改系统提示词</button>
+      <button data-action="manage-docs">管理参考文档 <span id="menu-doc-count" class="menu-kbd">0</span></button>
+      <div class="menu-sep"></div>
       <button data-action="open-config">打开配置文件</button>
       <button data-action="reload-config">重载配置</button>
     </div>
 
+    <!-- 修改快捷键 -->
     <div id="hotkey-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-card">
         <h3 id="hotkey-modal-title">设置快捷键</h3>
@@ -60,6 +65,45 @@
         <div class="modal-actions">
           <button id="hotkey-clear" class="btn-secondary">清除</button>
           <button id="hotkey-cancel" class="btn-secondary">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 修改系统提示词 -->
+    <div id="prompt-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card modal-card-wide">
+        <h3>修改系统提示词</h3>
+        <textarea id="prompt-input" rows="10" spellcheck="false"></textarea>
+        <p class="modal-hint small">当前对话不会受影响；下次"新建对话"或重启程序后生效。</p>
+        <p id="prompt-error" class="modal-error hidden"></p>
+        <div class="modal-actions">
+          <button id="prompt-cancel" class="btn-secondary">取消</button>
+          <button id="prompt-save" class="btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 管理参考文档 -->
+    <div id="docs-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card modal-card-wide">
+        <h3>参考文档</h3>
+        <div id="docs-list" class="docs-list"></div>
+        <div class="docs-actions">
+          <button id="docs-add" class="btn-primary">+ 添加文档</button>
+          <button id="docs-close" class="btn-secondary">关闭</button>
+        </div>
+        <p class="modal-hint small">已启用的文档会以"参考资料"形式拼接到 system prompt，每次发消息都会带上。</p>
+      </div>
+    </div>
+
+    <!-- 文档预览 -->
+    <div id="preview-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card modal-card-wide modal-card-tall">
+        <h3 id="preview-title">文档预览</h3>
+        <pre id="preview-content" class="preview-content"></pre>
+        <p id="preview-truncated" class="modal-hint small hidden"></p>
+        <div class="modal-actions">
+          <button id="preview-close" class="btn-secondary">关闭</button>
         </div>
       </div>
     </div>

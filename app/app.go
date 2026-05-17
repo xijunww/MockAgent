@@ -17,6 +17,7 @@ import (
 	"mockagent/internal/asr"
 	"mockagent/internal/config"
 	"mockagent/internal/conversation"
+	"mockagent/internal/docs"
 	"mockagent/internal/hotkey"
 	"mockagent/internal/llm"
 	"mockagent/internal/recorder"
@@ -38,6 +39,7 @@ const (
 	EventConfigStatus        = "config-status"
 	EventSendHotkeyPressed   = "send-hotkey-pressed" // 发送热键被按下；前端读输入框并调用 SendMessage
 	EventHotkeyChanged       = "hotkey-changed"      // 热键修改成功后通知前端刷新展示
+	EventDocumentsChanged    = "documents-changed"   // 文档列表/启用状态变更
 )
 
 // HotkeyKind 区分录音热键与发送热键。
@@ -62,6 +64,7 @@ type App struct {
 	llmCli       *llm.Client
 	store        *conversation.Store
 	trayMgr      *tray.Manager
+	docsMgr      *docs.Manager // 参考文档管理
 
 	// 录音 / ASR 状态。
 	asrSession atomic.Int64    // 当前 ASR session id；新一轮 Press 自增以丢弃旧结果
@@ -89,6 +92,16 @@ func (a *App) startup(ctx context.Context) {
 		a.loadErr = err
 		a.emit(EventConfigStatus, map[string]any{"ok": false, "error": a.redactErrText(err)})
 		// 即便加载失败，也允许应用继续运行（前端会显示错误页）。
+	}
+
+	// 加载文档库（与 config 同目录）。失败不致命，UI 会看到空列表。
+	if dm, err := docs.Load(a.cfgDir); err != nil {
+		a.emit(EventConfigStatus, map[string]any{
+			"ok": false, "error": fmt.Sprintf("加载参考文档失败: %v", err),
+		})
+		a.docsMgr = docs.New(a.cfgDir)
+	} else {
+		a.docsMgr = dm
 	}
 
 	// Recorder 设备探测（异步，不阻塞启动）。
@@ -461,6 +474,13 @@ func (a *App) runLLM(ctx context.Context) {
 			ReasoningContent: m.ReasoningContent,
 		})
 	}
+	// 注入参考文档：把所有启用的文档拼到第一条 system 消息后面。
+	// 注意只影响发送给 LLM 的拷贝，不修改 store 里的历史，保证导出时不泄露文档。
+	if a.docsMgr != nil {
+		if extra := a.docsMgr.BuildContext(); extra != "" {
+			injectDocsIntoSystemMessage(&msgs, extra)
+		}
+	}
 	ch, err := a.llmCli.Stream(ctx, msgs)
 	if err != nil {
 		var herr *llm.HTTPError
@@ -552,6 +572,7 @@ func (a *App) GetConfig() map[string]any {
 	out["base_url"] = v.DeepSeek.BaseURL
 	out["thinking"] = v.DeepSeek.Thinking
 	out["reasoning_effort"] = v.DeepSeek.ReasoningEffort
+	out["system_prompt"] = v.DeepSeek.SystemPrompt
 	out["tencent"] = map[string]any{
 		"app_id":     v.Tencent.AppID,
 		"secret_id":  v.Tencent.SecretID,
@@ -672,6 +693,133 @@ func (a *App) ReloadConfig() error {
 	a.applyHotkeyConfig()
 	a.emit(EventConfigStatus, map[string]any{"ok": true})
 	return nil
+}
+
+// UpdateSystemPrompt 修改并持久化 system prompt。
+//
+// 仅写入 config.json，不影响当前会话；下次 NewConversation 或重启后生效。
+func (a *App) UpdateSystemPrompt(prompt string) error {
+	defer a.recoverPanic("update-system-prompt")
+
+	a.cfgMu.Lock()
+	if a.cfg == nil {
+		a.cfgMu.Unlock()
+		return errors.New("配置未加载")
+	}
+	cfg := *a.cfg
+	cfg.DeepSeek.SystemPrompt = prompt
+	a.cfgMu.Unlock()
+
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+
+	a.cfgMu.Lock()
+	a.cfg = &cfg
+	a.cfgMu.Unlock()
+	a.rebuildClients()
+	return nil
+}
+
+// ----- 参考文档 -----
+
+// ListDocuments 返回当前文档元数据列表。
+func (a *App) ListDocuments() []docs.Document {
+	if a.docsMgr == nil {
+		return nil
+	}
+	return a.docsMgr.List()
+}
+
+// AddDocument 弹出文件选择框，让用户选一份文档加入参考文档库。
+//
+// 用户取消选择时返回 nil, nil（不视为错误）。
+func (a *App) AddDocument() (*docs.Document, error) {
+	defer a.recoverPanic("add-document")
+	if a.docsMgr == nil {
+		return nil, errors.New("文档管理器未初始化")
+	}
+	path, err := rt.OpenFileDialog(a.ctx, rt.OpenDialogOptions{
+		Title: "选择参考文档",
+		Filters: []rt.FileFilter{
+			{DisplayName: "受支持的文档", Pattern: "*.txt;*.md;*.markdown;*.docx;*.pdf;*.csv;*.json;*.yaml;*.yml;*.xml;*.html;*.htm;*.log;*.go;*.py;*.js;*.ts"},
+			{DisplayName: "所有文件", Pattern: "*.*"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return nil, nil
+	}
+	doc, err := a.docsMgr.Add(path)
+	if err != nil {
+		return nil, err
+	}
+	a.emit(EventDocumentsChanged, nil)
+	return &doc, nil
+}
+
+// RemoveDocument 删除指定 id 的文档。
+func (a *App) RemoveDocument(id string) error {
+	defer a.recoverPanic("remove-document")
+	if a.docsMgr == nil {
+		return errors.New("文档管理器未初始化")
+	}
+	if err := a.docsMgr.Remove(id); err != nil {
+		return err
+	}
+	a.emit(EventDocumentsChanged, nil)
+	return nil
+}
+
+// SetDocumentEnabled 切换文档的启用状态。
+func (a *App) SetDocumentEnabled(id string, enabled bool) error {
+	defer a.recoverPanic("set-document-enabled")
+	if a.docsMgr == nil {
+		return errors.New("文档管理器未初始化")
+	}
+	if err := a.docsMgr.SetEnabled(id, enabled); err != nil {
+		return err
+	}
+	a.emit(EventDocumentsChanged, nil)
+	return nil
+}
+
+// GetDocumentPreview 返回文档预览（截断到 docs.PreviewMaxRunes）。
+func (a *App) GetDocumentPreview(id string) (map[string]any, error) {
+	defer a.recoverPanic("preview-document")
+	if a.docsMgr == nil {
+		return nil, errors.New("文档管理器未初始化")
+	}
+	text, truncated, err := a.docsMgr.Preview(id)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"text":      text,
+		"truncated": truncated,
+	}, nil
+}
+
+// injectDocsIntoSystemMessage 把 extra 拼接到 msgs 第一条 system 消息后面；
+// 若没有 system 消息则在前部插入一条。修改是就地的。
+func injectDocsIntoSystemMessage(msgs *[]llm.Message, extra string) {
+	if extra == "" {
+		return
+	}
+	for i, m := range *msgs {
+		if m.Role == "system" {
+			if m.Content == "" {
+				(*msgs)[i].Content = extra
+			} else {
+				(*msgs)[i].Content = m.Content + "\n\n" + extra
+			}
+			return
+		}
+	}
+	// 没有 system 消息：在最前插入一条
+	*msgs = append([]llm.Message{{Role: "system", Content: extra}}, (*msgs)...)
 }
 
 // ExportConversation 把当前会话导出到用户选择的路径。format 仅支持 "md" / "json"。

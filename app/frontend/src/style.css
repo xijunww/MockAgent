@@ -476,3 +476,139 @@ html, body {
   cursor: pointer;
 }
 .btn-secondary:hover { background: var(--bg-elev); }
+
+
+/* ===== 文档徽标（状态栏右侧） ===== */
+.recording-status { justify-content: flex-start; }
+.docs-badge {
+  margin-left: auto;
+  margin-right: 4px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-dim);
+  user-select: none;
+}
+.docs-badge:hover { background: var(--ai-bubble); color: var(--text); }
+.docs-badge.hidden { display: none; }
+
+/* ===== 系统提示词 / 文档管理 弹窗 ===== */
+.modal-card-wide { width: 520px; }
+.modal-card-tall { max-height: 80vh; display: flex; flex-direction: column; }
+
+#prompt-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+#prompt-input:focus { border-color: var(--user-bubble); }
+
+.btn-primary {
+  background: var(--user-bubble);
+  color: white;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+
+/* ===== 文档列表 ===== */
+.docs-list {
+  max-height: 360px;
+  overflow-y: auto;
+  margin: 8px 0 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.docs-list:empty::before {
+  content: "尚未添加文档。点击下方"+ 添加文档"按钮选择一个文件。";
+  display: block;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.doc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-row:last-child { border-bottom: 0; }
+.doc-row.broken { opacity: 0.6; }
+.doc-checkbox { cursor: pointer; }
+.doc-info {
+  flex: 1;
+  min-width: 0;
+}
+.doc-name {
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.doc-warn {
+  color: var(--warning);
+  margin-left: 4px;
+}
+.doc-broken-tag {
+  color: var(--danger);
+  margin-left: 4px;
+}
+.doc-actions {
+  display: flex;
+  gap: 4px;
+}
+.doc-action {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.doc-action:hover { background: var(--bg-elev); color: var(--text); }
+.doc-action.danger:hover { background: rgba(239, 68, 68, 0.15); color: #fca5a5; border-color: rgba(239, 68, 68, 0.5); }
+
+.docs-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.preview-content {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow: auto;
+  margin: 8px 0;
+  max-height: 50vh;
+}

@@ -8,6 +8,8 @@ import {
   SendMessage, StopGeneration, NewConversation, GetConfig,
   OpenConfigFile, ReloadConfig, ExportConversation,
   SimulatePress, SimulateRelease, UpdateHotkey,
+  UpdateSystemPrompt,
+  ListDocuments, AddDocument, RemoveDocument, SetDocumentEnabled, GetDocumentPreview,
 } from '../wailsjs/go/main/App.js';
 import { EventsOn } from '../wailsjs/runtime/runtime.js';
 
@@ -456,6 +458,10 @@ configMenu.querySelectorAll('button').forEach((btn) => {
       openHotkeyModal('record');
     } else if (action === 'edit-send-hotkey') {
       openHotkeyModal('send');
+    } else if (action === 'edit-system-prompt') {
+      openPromptModal();
+    } else if (action === 'manage-docs') {
+      openDocsModal();
     }
   });
 });
@@ -636,4 +642,211 @@ $('hotkey-clear').addEventListener('click', () => {
 $('hotkey-cancel').addEventListener('click', closeHotkeyModal);
 hotkeyModal.addEventListener('click', (e) => {
   if (e.target === hotkeyModal) closeHotkeyModal();
+});
+
+
+// ==================== 系统提示词弹窗 ====================
+const promptModal = $('prompt-modal');
+const promptInput = $('prompt-input');
+const promptError = $('prompt-error');
+
+async function openPromptModal() {
+  try {
+    const cfg = await GetConfig();
+    promptInput.value = cfg?.system_prompt ?? '';
+  } catch (_) {
+    promptInput.value = '';
+  }
+  promptError.classList.add('hidden');
+  promptModal.classList.remove('hidden');
+  requestAnimationFrame(() => promptInput.focus());
+}
+
+function closePromptModal() {
+  promptModal.classList.add('hidden');
+}
+
+$('prompt-cancel').addEventListener('click', closePromptModal);
+$('prompt-save').addEventListener('click', async () => {
+  promptError.classList.add('hidden');
+  try {
+    await UpdateSystemPrompt(promptInput.value);
+    closePromptModal();
+    flashStatus('notice', '✓', '系统提示词已保存（下次新建对话生效）', 2000);
+  } catch (e) {
+    promptError.textContent = String(e?.message || e || '保存失败');
+    promptError.classList.remove('hidden');
+  }
+});
+promptModal.addEventListener('click', (e) => {
+  if (e.target === promptModal) closePromptModal();
+});
+
+// ==================== 文档管理弹窗 ====================
+const docsModal = $('docs-modal');
+const docsList = $('docs-list');
+const docsBadge = $('docs-badge');
+const menuDocCount = $('menu-doc-count');
+let cachedDocs = [];
+
+async function refreshDocs() {
+  try {
+    cachedDocs = (await ListDocuments()) || [];
+  } catch (_) {
+    cachedDocs = [];
+  }
+  renderDocsList();
+  refreshDocsBadge();
+}
+
+function refreshDocsBadge() {
+  const enabled = cachedDocs.filter((d) => d.enabled && !d.broken);
+  if (menuDocCount) menuDocCount.textContent = enabled.length;
+  if (enabled.length === 0) {
+    docsBadge.classList.add('hidden');
+    return;
+  }
+  docsBadge.classList.remove('hidden');
+  if (enabled.length === 1) {
+    docsBadge.textContent = `📎 ${enabled[0].name}`;
+  } else {
+    docsBadge.textContent = `📎 ${enabled.length} 份文档`;
+  }
+}
+
+function renderDocsList() {
+  docsList.innerHTML = '';
+  for (const d of cachedDocs) {
+    const row = document.createElement('div');
+    row.className = 'doc-row' + (d.broken ? ' broken' : '');
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'doc-checkbox';
+    cb.checked = d.enabled;
+    cb.disabled = d.broken;
+    cb.addEventListener('change', async () => {
+      try {
+        await SetDocumentEnabled(d.id, cb.checked);
+      } catch (e) {
+        cb.checked = !cb.checked;
+        alert(String(e?.message || e));
+      }
+    });
+    row.appendChild(cb);
+
+    const info = document.createElement('div');
+    info.className = 'doc-info';
+    const name = document.createElement('div');
+    name.className = 'doc-name';
+    name.textContent = d.name;
+    info.appendChild(name);
+    const meta = document.createElement('div');
+    meta.className = 'doc-meta';
+    meta.textContent = `${d.format.toUpperCase()} · ${formatChars(d.char_count)}`;
+    if (d.char_count > 100000) {
+      const warn = document.createElement('span');
+      warn.className = 'doc-warn';
+      warn.textContent = ' ⚠ 文档较长，会增加 token 消耗';
+      meta.appendChild(warn);
+    }
+    if (d.broken) {
+      const tag = document.createElement('span');
+      tag.className = 'doc-broken-tag';
+      tag.textContent = ' · 文本副本丢失';
+      meta.appendChild(tag);
+    }
+    info.appendChild(meta);
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'doc-actions';
+    if (!d.broken) {
+      const btnPreview = document.createElement('button');
+      btnPreview.className = 'doc-action';
+      btnPreview.textContent = '预览';
+      btnPreview.addEventListener('click', () => openPreview(d));
+      actions.appendChild(btnPreview);
+    }
+    const btnRemove = document.createElement('button');
+    btnRemove.className = 'doc-action danger';
+    btnRemove.textContent = '删除';
+    btnRemove.addEventListener('click', async () => {
+      if (!confirm(`删除文档"${d.name}"？该操作不可撤销。`)) return;
+      try {
+        await RemoveDocument(d.id);
+      } catch (e) {
+        alert(String(e?.message || e));
+      }
+    });
+    actions.appendChild(btnRemove);
+    row.appendChild(actions);
+
+    docsList.appendChild(row);
+  }
+}
+
+function formatChars(n) {
+  if (n >= 10000) return `${(n / 10000).toFixed(1)} 万字`;
+  return `${n.toLocaleString()} 字`;
+}
+
+async function openDocsModal() {
+  await refreshDocs();
+  docsModal.classList.remove('hidden');
+}
+
+function closeDocsModal() {
+  docsModal.classList.add('hidden');
+}
+
+$('docs-add').addEventListener('click', async () => {
+  try {
+    const doc = await AddDocument();
+    if (doc) {
+      flashStatus('notice', '✓', `已添加：${doc.name}`, 2000);
+    }
+  } catch (e) {
+    alert('添加失败: ' + (e?.message || e));
+  }
+});
+
+$('docs-close').addEventListener('click', closeDocsModal);
+docsModal.addEventListener('click', (e) => {
+  if (e.target === docsModal) closeDocsModal();
+});
+
+docsBadge.addEventListener('click', () => openDocsModal());
+
+EventsOn('documents-changed', refreshDocs);
+
+// 启动时拉一次
+refreshDocs();
+
+// ==================== 文档预览弹窗 ====================
+const previewModal = $('preview-modal');
+const previewTitle = $('preview-title');
+const previewContent = $('preview-content');
+const previewTruncated = $('preview-truncated');
+
+async function openPreview(d) {
+  try {
+    const result = await GetDocumentPreview(d.id);
+    previewTitle.textContent = `预览：${d.name}`;
+    previewContent.textContent = result?.text || '';
+    if (result?.truncated) {
+      previewTruncated.textContent = `内容较长，仅显示前 ${formatChars(previewContent.textContent.length)}（完整内容会作为参考资料发给模型）。`;
+      previewTruncated.classList.remove('hidden');
+    } else {
+      previewTruncated.classList.add('hidden');
+    }
+    previewModal.classList.remove('hidden');
+  } catch (e) {
+    alert('预览失败: ' + (e?.message || e));
+  }
+}
+
+$('preview-close').addEventListener('click', () => previewModal.classList.add('hidden'));
+previewModal.addEventListener('click', (e) => {
+  if (e.target === previewModal) previewModal.classList.add('hidden');
 });

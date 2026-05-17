@@ -1,10 +1,12 @@
 module mockagent
 
-go 1.23.0
+go 1.24.1
 
 require (
 	github.com/gen2brain/malgo v0.11.25
 	github.com/getlantern/systray v1.2.2
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
+	github.com/oklog/ulid/v2 v2.1.1
 	github.com/tencentcloud/tencentcloud-speech-sdk-go v0.0.0-00010101000000-000000000000
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.design/x/hotkey v0.4.1

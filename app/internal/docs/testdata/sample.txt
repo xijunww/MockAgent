@@ -1,0 +1,3 @@
+Hello MockAgent
+你好世界
+This is a sample document.

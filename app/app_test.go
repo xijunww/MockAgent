@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"mockagent/internal/config"
+	"mockagent/internal/llm"
 )
 
 func TestValidateHotkeyChange(t *testing.T) {
@@ -58,4 +59,51 @@ func TestValidateHotkeyChange(t *testing.T) {
 	if err := validateHotkeyChange(cfg4, HotkeyKindRecord, "F2"); err != nil {
 		t.Errorf("empty other should pass, got %v", err)
 	}
+}
+
+
+func TestInjectDocsIntoSystemMessage(t *testing.T) {
+	t.Run("empty extra is no-op", func(t *testing.T) {
+		msgs := []llm.Message{{Role: "user", Content: "hi"}}
+		injectDocsIntoSystemMessage(&msgs, "")
+		if len(msgs) != 1 || msgs[0].Role != "user" {
+			t.Errorf("expected unchanged, got %+v", msgs)
+		}
+	})
+
+	t.Run("appends to existing system", func(t *testing.T) {
+		msgs := []llm.Message{
+			{Role: "system", Content: "be helpful"},
+			{Role: "user", Content: "hi"},
+		}
+		injectDocsIntoSystemMessage(&msgs, "DOCS")
+		if msgs[0].Content != "be helpful\n\nDOCS" {
+			t.Errorf("got %q", msgs[0].Content)
+		}
+		if msgs[1].Content != "hi" {
+			t.Errorf("user msg should not change")
+		}
+	})
+
+	t.Run("inserts when no system", func(t *testing.T) {
+		msgs := []llm.Message{{Role: "user", Content: "hi"}}
+		injectDocsIntoSystemMessage(&msgs, "DOCS")
+		if len(msgs) != 2 || msgs[0].Role != "system" || msgs[0].Content != "DOCS" {
+			t.Errorf("unexpected: %+v", msgs)
+		}
+		if msgs[1].Content != "hi" {
+			t.Errorf("user msg lost")
+		}
+	})
+
+	t.Run("system has empty content", func(t *testing.T) {
+		msgs := []llm.Message{
+			{Role: "system", Content: ""},
+			{Role: "user", Content: "hi"},
+		}
+		injectDocsIntoSystemMessage(&msgs, "DOCS")
+		if msgs[0].Content != "DOCS" {
+			t.Errorf("got %q", msgs[0].Content)
+		}
+	})
 }
