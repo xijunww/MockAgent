@@ -282,8 +282,6 @@ func (a *App) startRecording() {
 		a.emit(EventASRNotice, map[string]any{"message": "腾讯云凭证未配置，无法录音"})
 		return
 	}
-	// 新一轮按下：递增 session id，丢弃尚未完成的 ASR 结果。
-	a.asrSession.Add(1)
 
 	if err := a.rec.Start(); err != nil {
 		a.emit(EventASRError, map[string]any{"error": fmt.Sprintf("麦克风启动失败: %v", err)})
@@ -313,7 +311,10 @@ func (a *App) stopRecording() {
 		return
 	}
 
-	sessionID := a.asrSession.Load()
+	// 只在通过最小时长校验后才推进 sessionID。
+	// 这样幽灵的快速 press/release（hotkey 库消息队列残留）
+	// 不会废掉前一次还在进行中的真实 ASR。
+	sessionID := a.asrSession.Add(1)
 	go a.runASR(sessionID, pcm)
 }
 
@@ -321,10 +322,18 @@ func (a *App) runASR(sessionID int64, pcm []byte) {
 	defer a.recoverPanic("asr")
 	a.emit(EventASRProgress, map[string]any{"stage": "recognizing"})
 
+	// 调试模式：把 PCM 写到 MOCK_AGENT_DEBUG_DIR 指定目录便于离线诊断。
+	if logDir := os.Getenv("MOCK_AGENT_DEBUG_DIR"); logDir != "" {
+		_ = os.MkdirAll(logDir, 0o755)
+		fname := filepath.Join(logDir, fmt.Sprintf("asr-%d.pcm", sessionID))
+		_ = os.WriteFile(fname, pcm, 0o644)
+	}
+
 	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
 	defer cancel()
 
 	text, err := a.asrCli.Recognize(ctx, pcm)
+
 	// 若已过期（用户开了新一轮录音），直接丢弃。
 	if a.asrSession.Load() != sessionID {
 		return
