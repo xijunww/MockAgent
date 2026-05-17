@@ -136,7 +136,10 @@ func (c *Client) Stream(ctx context.Context, messages []Message) (<-chan StreamE
 		if c.opts.ReasoningEffort != "" {
 			body.ReasoningEffort = c.opts.ReasoningEffort
 		}
+	} else if c.opts.Thinking == "disabled" {
+		body.Thinking = &ThinkingField{Type: "disabled"}
 	}
+	// 其他值（包括空字符串）不发 thinking 字段，使用模型默认行为。
 
 	buf, err := json.Marshal(body)
 	if err != nil {
