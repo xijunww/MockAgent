@@ -72,10 +72,18 @@
     <!-- 修改系统提示词 -->
     <div id="prompt-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-card modal-card-wide">
-        <h3>修改系统提示词</h3>
-        <textarea id="prompt-input" rows="10" spellcheck="false"></textarea>
-        <p class="modal-hint small">当前对话不会受影响；下次"新建对话"或重启程序后生效。</p>
+        <h3>系统提示词</h3>
+        <textarea id="prompt-input" rows="8" spellcheck="false"
+                  placeholder="输入系统提示词，保存后立即生效..."></textarea>
         <p id="prompt-error" class="modal-error hidden"></p>
+
+        <div class="prompt-history-header">
+          <span>历史</span>
+          <span id="prompt-history-empty" class="modal-hint small">尚无历史，保存后会出现在这里。</span>
+        </div>
+        <div id="prompt-history" class="prompt-history"></div>
+
+        <p class="modal-hint small">点击历史项加载到上方编辑框；保存按钮把当前内容设为正在使用的提示词，并加入历史。</p>
         <div class="modal-actions">
           <button id="prompt-cancel" class="btn-secondary">取消</button>
           <button id="prompt-save" class="btn-primary">保存</button>

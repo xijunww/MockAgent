@@ -8,8 +8,8 @@ import {
   SendMessage, StopGeneration, NewConversation, GetConfig,
   OpenConfigFile, ReloadConfig, ExportConversation,
   SimulatePress, SimulateRelease, UpdateHotkey,
-  UpdateSystemPrompt,
   ListDocuments, AddDocument, RemoveDocument, SetDocumentEnabled, GetDocumentPreview,
+  GetSystemPromptState, SaveSystemPrompt, DeleteSystemPromptHistory,
 } from '../wailsjs/go/main/App.js';
 import { EventsOn } from '../wailsjs/runtime/runtime.js';
 
@@ -649,17 +649,80 @@ hotkeyModal.addEventListener('click', (e) => {
 const promptModal = $('prompt-modal');
 const promptInput = $('prompt-input');
 const promptError = $('prompt-error');
+const promptHistoryList = $('prompt-history');
+const promptHistoryEmpty = $('prompt-history-empty');
+
+let promptCachedActive = '';
 
 async function openPromptModal() {
-  try {
-    const cfg = await GetConfig();
-    promptInput.value = cfg?.system_prompt ?? '';
-  } catch (_) {
-    promptInput.value = '';
-  }
   promptError.classList.add('hidden');
+  await refreshPromptModal();
   promptModal.classList.remove('hidden');
   requestAnimationFrame(() => promptInput.focus());
+}
+
+async function refreshPromptModal() {
+  try {
+    const state = await GetSystemPromptState();
+    promptCachedActive = state?.active || '';
+    promptInput.value = promptCachedActive;
+    renderPromptHistory(state?.history || []);
+  } catch (e) {
+    promptInput.value = '';
+    renderPromptHistory([]);
+  }
+}
+
+function renderPromptHistory(items) {
+  promptHistoryList.innerHTML = '';
+  if (!items || items.length === 0) {
+    promptHistoryEmpty.classList.remove('hidden');
+    return;
+  }
+  promptHistoryEmpty.classList.add('hidden');
+  for (const text of items) {
+    const row = document.createElement('div');
+    row.className = 'prompt-row';
+    if (text === promptCachedActive) row.classList.add('active');
+
+    const mark = document.createElement('span');
+    mark.className = 'prompt-active-mark';
+    if (text === promptCachedActive) {
+      mark.textContent = '●';
+    } else {
+      mark.classList.add('empty');
+      mark.textContent = '●';
+    }
+    row.appendChild(mark);
+
+    const content = document.createElement('div');
+    content.className = 'prompt-row-content';
+    content.textContent = text;
+    row.appendChild(content);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'prompt-row-delete';
+    del.textContent = '×';
+    del.title = '从历史中删除';
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('从历史中删除该提示词？')) return;
+      try {
+        await DeleteSystemPromptHistory(text);
+        await refreshPromptModal();
+      } catch (err) {
+        alert(String(err?.message || err));
+      }
+    });
+    row.appendChild(del);
+
+    row.addEventListener('click', () => {
+      promptInput.value = text;
+      promptInput.focus();
+    });
+    promptHistoryList.appendChild(row);
+  }
 }
 
 function closePromptModal() {
@@ -669,10 +732,16 @@ function closePromptModal() {
 $('prompt-cancel').addEventListener('click', closePromptModal);
 $('prompt-save').addEventListener('click', async () => {
   promptError.classList.add('hidden');
+  const content = promptInput.value;
+  if (!content || !content.trim()) {
+    promptError.textContent = '系统提示词不能为空';
+    promptError.classList.remove('hidden');
+    return;
+  }
   try {
-    await UpdateSystemPrompt(promptInput.value);
+    await SaveSystemPrompt(content);
     closePromptModal();
-    flashStatus('notice', '✓', '系统提示词已保存（下次新建对话生效）', 2000);
+    flashStatus('notice', '✓', '系统提示词已保存（立即生效）', 2000);
   } catch (e) {
     promptError.textContent = String(e?.message || e || '保存失败');
     promptError.classList.remove('hidden');

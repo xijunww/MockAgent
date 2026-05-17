@@ -30,22 +30,19 @@ type Store struct {
 	messages []Message
 }
 
-// NewStore 创建一个 Store，并以 systemPrompt 初始化第一条 system 消息（空时不加）。
-func NewStore(systemPrompt string) *Store {
-	s := &Store{}
-	s.Reset(systemPrompt)
-	return s
+// NewStore 创建一个空的 Store。
+//
+// Store 只保存 user / assistant 两类消息；system prompt 由 App_Coordinator
+// 在每次 runLLM 时按当前 active 拼接，不存进历史。
+func NewStore() *Store {
+	return &Store{}
 }
 
-// Reset 把 messages 重置为仅含 system 消息（systemPrompt 非空时）或空列表。
-func (s *Store) Reset(systemPrompt string) {
+// Reset 清空消息历史。
+func (s *Store) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if strings.TrimSpace(systemPrompt) == "" {
-		s.messages = nil
-	} else {
-		s.messages = []Message{{Role: RoleSystem, Content: systemPrompt}}
-	}
+	s.messages = nil
 }
 
 // Append 追加一条 Message。

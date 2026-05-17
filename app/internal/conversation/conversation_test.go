@@ -10,23 +10,18 @@ import (
 	"time"
 )
 
-func TestStore_ResetWithSystemPrompt(t *testing.T) {
-	s := NewStore("be helpful")
-	got := s.Snapshot()
-	if len(got) != 1 || got[0].Role != RoleSystem || got[0].Content != "be helpful" {
-		t.Errorf("expected single system message, got %+v", got)
-	}
-}
-
-func TestStore_ResetEmptyPromptYieldsEmpty(t *testing.T) {
-	s := NewStore("   ")
+func TestStore_NewIsEmpty(t *testing.T) {
+	s := NewStore()
 	if s.Len() != 0 {
 		t.Errorf("expected empty store, got len=%d", s.Len())
+	}
+	if got := s.Snapshot(); len(got) != 0 {
+		t.Errorf("snapshot should be empty, got %+v", got)
 	}
 }
 
 func TestStore_AppendOrderPreserved(t *testing.T) {
-	s := NewStore("")
+	s := NewStore()
 	in := []Message{
 		{Role: RoleUser, Content: "hi"},
 		{Role: RoleAssistant, Content: "hello"},
@@ -42,13 +37,12 @@ func TestStore_AppendOrderPreserved(t *testing.T) {
 }
 
 func TestStore_ResetClears(t *testing.T) {
-	s := NewStore("sys")
+	s := NewStore()
 	s.Append(Message{Role: RoleUser, Content: "1"})
 	s.Append(Message{Role: RoleAssistant, Content: "2"})
-	s.Reset("sys2")
-	got := s.Snapshot()
-	if len(got) != 1 || got[0].Content != "sys2" {
-		t.Errorf("after Reset expected single system, got %+v", got)
+	s.Reset()
+	if s.Len() != 0 {
+		t.Errorf("after Reset expected empty, got %d", s.Len())
 	}
 }
 

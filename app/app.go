@@ -85,7 +85,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.cfgDir = configDir()
 
-	a.store = conversation.NewStore("")
+	a.store = conversation.NewStore()
 	a.rec = recorder.New(recorder.DefaultConfig())
 
 	if err := a.loadConfig(); err != nil {
@@ -238,11 +238,8 @@ func (a *App) rebuildClients() {
 		Thinking:        cfg.DeepSeek.Thinking,
 		ReasoningEffort: cfg.DeepSeek.ReasoningEffort,
 	})
-	// 重置会话 system prompt（仅当当前会话为空或仅含 system 时才重置；非空会话保留）。
 	if a.store == nil {
-		a.store = conversation.NewStore(cfg.DeepSeek.SystemPrompt)
-	} else if a.store.Len() <= 1 {
-		a.store.Reset(cfg.DeepSeek.SystemPrompt)
+		a.store = conversation.NewStore()
 	}
 }
 
@@ -466,7 +463,16 @@ func (a *App) runLLM(ctx context.Context) {
 	}()
 
 	snapshot := a.store.Snapshot()
-	msgs := make([]llm.Message, 0, len(snapshot))
+	msgs := make([]llm.Message, 0, len(snapshot)+1)
+
+	// 拼当前 active system prompt 作为第一条消息（空则不发）。
+	cfg := a.currentConfig()
+	if cfg != nil && strings.TrimSpace(cfg.DeepSeek.ActiveSystemPrompt) != "" {
+		msgs = append(msgs, llm.Message{
+			Role:    conversation.RoleSystem,
+			Content: cfg.DeepSeek.ActiveSystemPrompt,
+		})
+	}
 	for _, m := range snapshot {
 		msgs = append(msgs, llm.Message{
 			Role:             m.Role,
@@ -474,7 +480,7 @@ func (a *App) runLLM(ctx context.Context) {
 			ReasoningContent: m.ReasoningContent,
 		})
 	}
-	// 注入参考文档：把所有启用的文档拼到第一条 system 消息后面。
+	// 注入参考文档：把所有启用的文档拼到第一条 system 消息后面（没有 system 则会插一条）。
 	// 注意只影响发送给 LLM 的拷贝，不修改 store 里的历史，保证导出时不泄露文档。
 	if a.docsMgr != nil {
 		if extra := a.docsMgr.BuildContext(); extra != "" {
@@ -541,15 +547,12 @@ func (a *App) runLLM(ctx context.Context) {
 
 // ----- Wails 绑定方法 -----
 
-// NewConversation 取消进行中的 LLM，重置 messages。
+// NewConversation 取消进行中的 LLM，重置消息历史。
+//
+// 不再涉及 system prompt：每次发消息时按当前 active prompt 即时拼接。
 func (a *App) NewConversation() {
 	a.cancelLLM()
-	cfg := a.currentConfig()
-	prompt := ""
-	if cfg != nil {
-		prompt = cfg.DeepSeek.SystemPrompt
-	}
-	a.store.Reset(prompt)
+	a.store.Reset()
 	a.emit(EventConversationCleared, nil)
 }
 
@@ -572,7 +575,8 @@ func (a *App) GetConfig() map[string]any {
 	out["base_url"] = v.DeepSeek.BaseURL
 	out["thinking"] = v.DeepSeek.Thinking
 	out["reasoning_effort"] = v.DeepSeek.ReasoningEffort
-	out["system_prompt"] = v.DeepSeek.SystemPrompt
+	out["active_system_prompt"] = v.DeepSeek.ActiveSystemPrompt
+	out["system_prompt_history"] = v.DeepSeek.SystemPromptHistory
 	out["tencent"] = map[string]any{
 		"app_id":     v.Tencent.AppID,
 		"secret_id":  v.Tencent.SecretID,
@@ -695,29 +699,73 @@ func (a *App) ReloadConfig() error {
 	return nil
 }
 
-// UpdateSystemPrompt 修改并持久化 system prompt。
-//
-// 仅写入 config.json，不影响当前会话；下次 NewConversation 或重启后生效。
-func (a *App) UpdateSystemPrompt(prompt string) error {
-	defer a.recoverPanic("update-system-prompt")
+// ----- 系统提示词 -----
 
+// SystemPromptState 是返回给前端的提示词状态。
+type SystemPromptState struct {
+	Active  string   `json:"active"`
+	History []string `json:"history"`
+}
+
+// GetSystemPromptState 返回当前的 active prompt 与历史列表。
+func (a *App) GetSystemPromptState() SystemPromptState {
+	cfg := a.currentConfig()
+	if cfg == nil {
+		return SystemPromptState{}
+	}
+	return SystemPromptState{
+		Active:  cfg.DeepSeek.ActiveSystemPrompt,
+		History: append([]string(nil), cfg.DeepSeek.SystemPromptHistory...),
+	}
+}
+
+// SaveSystemPrompt 把 content 设为新 active；如果在历史里就置顶，否则追加到首位。
+// 立即生效，下一次 SendMessage 用新值。
+func (a *App) SaveSystemPrompt(content string) error {
+	defer a.recoverPanic("save-system-prompt")
+	if strings.TrimSpace(content) == "" {
+		return errors.New("系统提示词不能为空")
+	}
 	a.cfgMu.Lock()
 	if a.cfg == nil {
 		a.cfgMu.Unlock()
 		return errors.New("配置未加载")
 	}
 	cfg := *a.cfg
-	cfg.DeepSeek.SystemPrompt = prompt
 	a.cfgMu.Unlock()
 
+	if err := cfg.DeepSeek.SaveSystemPrompt(content); err != nil {
+		return err
+	}
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-
 	a.cfgMu.Lock()
 	a.cfg = &cfg
 	a.cfgMu.Unlock()
-	a.rebuildClients()
+	return nil
+}
+
+// DeleteSystemPromptHistory 从历史中删除 content；删的是 active 时自动接 history 下一条。
+func (a *App) DeleteSystemPromptHistory(content string) error {
+	defer a.recoverPanic("delete-system-prompt")
+	a.cfgMu.Lock()
+	if a.cfg == nil {
+		a.cfgMu.Unlock()
+		return errors.New("配置未加载")
+	}
+	cfg := *a.cfg
+	a.cfgMu.Unlock()
+
+	if err := cfg.DeepSeek.DeleteSystemPromptHistory(content); err != nil {
+		return err
+	}
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	a.cfgMu.Lock()
+	a.cfg = &cfg
+	a.cfgMu.Unlock()
 	return nil
 }
 

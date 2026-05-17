@@ -43,13 +43,24 @@ type Tencent struct {
 }
 
 // DeepSeek DeepSeek 大模型相关配置。
+//
+// 系统提示词从单一字符串改为"历史列表 + 当前活跃"：
+//   - SystemPromptHistory：用户用过的所有 prompt（最近用的在前，无重复）
+//   - ActiveSystemPrompt：当前生效的 prompt 内容（用内容本身做 key，
+//     既然 history 内部唯一，直接用字符串就够了）
+//   - LegacySystemPrompt：仅用于读取旧版 `system_prompt` 字段做迁移；
+//     写入时清空。
 type DeepSeek struct {
-	APIKey          string `json:"api_key"`
-	BaseURL         string `json:"base_url"`
-	Model           string `json:"model"`
-	Thinking        string `json:"thinking"`
-	ReasoningEffort string `json:"reasoning_effort"`
-	SystemPrompt    string `json:"system_prompt"`
+	APIKey              string   `json:"api_key"`
+	BaseURL             string   `json:"base_url"`
+	Model               string   `json:"model"`
+	Thinking            string   `json:"thinking"`
+	ReasoningEffort     string   `json:"reasoning_effort"`
+	SystemPromptHistory []string `json:"system_prompt_history"`
+	ActiveSystemPrompt  string   `json:"active_system_prompt"`
+
+	// LegacySystemPrompt 仅做迁移用；写入时清空。
+	LegacySystemPrompt string `json:"system_prompt,omitempty"`
 }
 
 // Audio 录音参数。
@@ -92,11 +103,12 @@ const (
 func Default() Config {
 	return Config{
 		DeepSeek: DeepSeek{
-			BaseURL:         "https://api.deepseek.com",
-			Model:           "deepseek-v4-pro",
-			Thinking:        "enabled",
-			ReasoningEffort: "medium",
-			SystemPrompt:    "You are a helpful assistant.",
+			BaseURL:             "https://api.deepseek.com",
+			Model:               "deepseek-v4-pro",
+			Thinking:            "enabled",
+			ReasoningEffort:     "medium",
+			SystemPromptHistory: []string{"You are a helpful assistant."},
+			ActiveSystemPrompt:  "You are a helpful assistant.",
 		},
 		RecordHotkey: DefaultRecordHotkey,
 		SendHotkey:   DefaultSendHotkey,
@@ -121,11 +133,13 @@ func (c Config) String() string {
 	masked.Tencent.SecretKey = maskNonEmpty(c.Tencent.SecretKey)
 	masked.DeepSeek.APIKey = maskNonEmpty(c.DeepSeek.APIKey)
 	return fmt.Sprintf("Config{Tencent:{AppID:%q SecretID:%s SecretKey:%s} "+
-		"DeepSeek:{APIKey:%s BaseURL:%q Model:%q Thinking:%q ReasoningEffort:%q SystemPromptLen:%d} "+
+		"DeepSeek:{APIKey:%s BaseURL:%q Model:%q Thinking:%q ReasoningEffort:%q "+
+		"PromptHistory:%d ActivePromptLen:%d} "+
 		"RecordHotkey:%q SendHotkey:%q Audio:%+v Source:%q}",
 		masked.Tencent.AppID, masked.Tencent.SecretID, masked.Tencent.SecretKey,
 		masked.DeepSeek.APIKey, masked.DeepSeek.BaseURL, masked.DeepSeek.Model,
-		masked.DeepSeek.Thinking, masked.DeepSeek.ReasoningEffort, len(masked.DeepSeek.SystemPrompt),
+		masked.DeepSeek.Thinking, masked.DeepSeek.ReasoningEffort,
+		len(masked.DeepSeek.SystemPromptHistory), len(masked.DeepSeek.ActiveSystemPrompt),
 		masked.RecordHotkey, masked.SendHotkey, masked.Audio, masked.sourcePath,
 	)
 }
@@ -136,7 +150,8 @@ func (c Config) MaskedView() Config {
 	v.Tencent.SecretID = maskNonEmpty(c.Tencent.SecretID)
 	v.Tencent.SecretKey = maskNonEmpty(c.Tencent.SecretKey)
 	v.DeepSeek.APIKey = maskNonEmpty(c.DeepSeek.APIKey)
-	v.LegacyHotkey = "" // 不暴露给前端
+	v.LegacyHotkey = ""             // 不暴露给前端
+	v.DeepSeek.LegacySystemPrompt = "" // 同上
 	return v
 }
 
@@ -226,6 +241,29 @@ func Load(dir string) (*Config, error) {
 		cfg.RecordHotkey = DefaultRecordHotkey
 	}
 
+	// 系统提示词迁移：如果文件里只有旧 system_prompt 字段，没有 history/active，
+	// 把旧值作为唯一一条历史并设为 active。
+	if cfg.DeepSeek.LegacySystemPrompt != "" {
+		var probe struct {
+			Hist   *[]string `json:"system_prompt_history"`
+			Active *string   `json:"active_system_prompt"`
+		}
+		var ds struct {
+			DeepSeek struct {
+				Hist   *[]string `json:"system_prompt_history"`
+				Active *string   `json:"active_system_prompt"`
+			} `json:"deepseek"`
+		}
+		_ = json.Unmarshal(raw, &ds)
+		probe.Hist = ds.DeepSeek.Hist
+		probe.Active = ds.DeepSeek.Active
+		if probe.Hist == nil && probe.Active == nil {
+			cfg.DeepSeek.SystemPromptHistory = []string{cfg.DeepSeek.LegacySystemPrompt}
+			cfg.DeepSeek.ActiveSystemPrompt = cfg.DeepSeek.LegacySystemPrompt
+		}
+	}
+	cfg.DeepSeek.LegacySystemPrompt = ""
+
 	applyEnvOverrides(&cfg)
 
 	return &cfg, nil
@@ -239,9 +277,10 @@ func (c *Config) Save() error {
 	if c.sourcePath == "" {
 		return errors.New("config: 未知保存路径（sourcePath 为空）")
 	}
-	// 写出前先清空 LegacyHotkey，避免文件中同时出现 hotkey 与 record_hotkey 两个键。
+	// 写出前先清空 Legacy 字段，避免新旧 key 同时出现。
 	out := *c
 	out.LegacyHotkey = ""
+	out.DeepSeek.LegacySystemPrompt = ""
 	data, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return fmt.Errorf("序列化配置失败: %w", err)
@@ -327,4 +366,59 @@ func OpenInEditor(path string) error {
 	default:
 		return exec.Command("xdg-open", abs).Run()
 	}
+}
+
+
+// SaveSystemPrompt 把 content 设为新的 active prompt，并整理历史：
+//   - content 为空时不做任何事，返回错误
+//   - content 已存在于历史中：将其移到第一位
+//   - 否则：追加到第一位
+//
+// 调用方应在之后调用 Config.Save() 落盘。
+func (d *DeepSeek) SaveSystemPrompt(content string) error {
+	if content == "" {
+		return errors.New("system prompt 不能为空")
+	}
+	d.SystemPromptHistory = removeString(d.SystemPromptHistory, content)
+	d.SystemPromptHistory = append([]string{content}, d.SystemPromptHistory...)
+	d.ActiveSystemPrompt = content
+	return nil
+}
+
+// DeleteSystemPromptHistory 从历史中删除 content。
+//   - 不存在则返回错误
+//   - 删除的是 active：active 自动改为新的第一项；历史空时 active 改为 ""
+func (d *DeepSeek) DeleteSystemPromptHistory(content string) error {
+	idx := indexOfString(d.SystemPromptHistory, content)
+	if idx < 0 {
+		return errors.New("该历史项不存在")
+	}
+	d.SystemPromptHistory = append(d.SystemPromptHistory[:idx], d.SystemPromptHistory[idx+1:]...)
+	if d.ActiveSystemPrompt == content {
+		if len(d.SystemPromptHistory) > 0 {
+			d.ActiveSystemPrompt = d.SystemPromptHistory[0]
+		} else {
+			d.ActiveSystemPrompt = ""
+		}
+	}
+	return nil
+}
+
+func removeString(s []string, v string) []string {
+	out := make([]string, 0, len(s))
+	for _, x := range s {
+		if x != v {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func indexOfString(s []string, v string) int {
+	for i, x := range s {
+		if x == v {
+			return i
+		}
+	}
+	return -1
 }

@@ -321,3 +321,164 @@ func TestSave_NoSourcePath(t *testing.T) {
 		t.Error("Save without sourcePath should fail")
 	}
 }
+
+
+func TestLoad_MigrateLegacySystemPrompt(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, FileName), `{
+		"tencent":{"app_id":"a","secret_id":"b","secret_key":"c"},
+		"deepseek":{"api_key":"sk","system_prompt":"You are X."}
+	}`)
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.DeepSeek.ActiveSystemPrompt; got != "You are X." {
+		t.Errorf("active = %q want migration", got)
+	}
+	if len(cfg.DeepSeek.SystemPromptHistory) != 1 || cfg.DeepSeek.SystemPromptHistory[0] != "You are X." {
+		t.Errorf("history = %+v want [\"You are X.\"]", cfg.DeepSeek.SystemPromptHistory)
+	}
+	if cfg.DeepSeek.LegacySystemPrompt != "" {
+		t.Errorf("Legacy should be cleared, got %q", cfg.DeepSeek.LegacySystemPrompt)
+	}
+}
+
+func TestLoad_NewSystemPromptFormatTakesPrecedence(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, FileName), `{
+		"tencent":{"app_id":"a","secret_id":"b","secret_key":"c"},
+		"deepseek":{
+			"api_key":"sk",
+			"system_prompt":"old",
+			"system_prompt_history":["A","B"],
+			"active_system_prompt":"A"
+		}
+	}`)
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DeepSeek.ActiveSystemPrompt != "A" {
+		t.Errorf("new fields should win, active=%q", cfg.DeepSeek.ActiveSystemPrompt)
+	}
+	if len(cfg.DeepSeek.SystemPromptHistory) != 2 {
+		t.Errorf("history len=%d", len(cfg.DeepSeek.SystemPromptHistory))
+	}
+}
+
+func TestSave_DropsLegacySystemPrompt(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	cfg := Default()
+	cfg.Tencent = Tencent{AppID: "a", SecretID: "b", SecretKey: "c"}
+	cfg.DeepSeek.APIKey = "sk"
+	cfg.DeepSeek.LegacySystemPrompt = "should not write"
+	cfg.SetSourcePath(path)
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), `"system_prompt"`) {
+		t.Errorf("Save should drop legacy field, got: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"system_prompt_history"`) {
+		t.Errorf("Save should write history field")
+	}
+}
+
+func TestDeepSeek_SaveSystemPrompt(t *testing.T) {
+	t.Run("empty rejected", func(t *testing.T) {
+		var d DeepSeek
+		if err := d.SaveSystemPrompt(""); err == nil {
+			t.Error("empty should error")
+		}
+	})
+	t.Run("appends new content", func(t *testing.T) {
+		d := DeepSeek{
+			SystemPromptHistory: []string{"A", "B"},
+			ActiveSystemPrompt:  "A",
+		}
+		if err := d.SaveSystemPrompt("C"); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(d.SystemPromptHistory, []string{"C", "A", "B"}) {
+			t.Errorf("history = %+v", d.SystemPromptHistory)
+		}
+		if d.ActiveSystemPrompt != "C" {
+			t.Errorf("active = %q", d.ActiveSystemPrompt)
+		}
+	})
+	t.Run("moves existing to top, keeps length", func(t *testing.T) {
+		d := DeepSeek{
+			SystemPromptHistory: []string{"A", "B", "C"},
+			ActiveSystemPrompt:  "A",
+		}
+		if err := d.SaveSystemPrompt("C"); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(d.SystemPromptHistory, []string{"C", "A", "B"}) {
+			t.Errorf("history = %+v", d.SystemPromptHistory)
+		}
+		if d.ActiveSystemPrompt != "C" {
+			t.Errorf("active = %q", d.ActiveSystemPrompt)
+		}
+	})
+}
+
+func TestDeepSeek_DeleteSystemPromptHistory(t *testing.T) {
+	t.Run("delete non-active leaves active", func(t *testing.T) {
+		d := DeepSeek{
+			SystemPromptHistory: []string{"A", "B", "C"},
+			ActiveSystemPrompt:  "A",
+		}
+		if err := d.DeleteSystemPromptHistory("B"); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(d.SystemPromptHistory, []string{"A", "C"}) {
+			t.Errorf("history = %+v", d.SystemPromptHistory)
+		}
+		if d.ActiveSystemPrompt != "A" {
+			t.Errorf("active changed to %q", d.ActiveSystemPrompt)
+		}
+	})
+	t.Run("delete active picks next first", func(t *testing.T) {
+		d := DeepSeek{
+			SystemPromptHistory: []string{"A", "B", "C"},
+			ActiveSystemPrompt:  "A",
+		}
+		if err := d.DeleteSystemPromptHistory("A"); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(d.SystemPromptHistory, []string{"B", "C"}) {
+			t.Errorf("history = %+v", d.SystemPromptHistory)
+		}
+		if d.ActiveSystemPrompt != "B" {
+			t.Errorf("active should pick new first, got %q", d.ActiveSystemPrompt)
+		}
+	})
+	t.Run("delete last empties active", func(t *testing.T) {
+		d := DeepSeek{
+			SystemPromptHistory: []string{"A"},
+			ActiveSystemPrompt:  "A",
+		}
+		if err := d.DeleteSystemPromptHistory("A"); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.SystemPromptHistory) != 0 {
+			t.Errorf("history not empty: %+v", d.SystemPromptHistory)
+		}
+		if d.ActiveSystemPrompt != "" {
+			t.Errorf("active should be empty, got %q", d.ActiveSystemPrompt)
+		}
+	})
+	t.Run("delete unknown errors", func(t *testing.T) {
+		d := DeepSeek{SystemPromptHistory: []string{"A"}}
+		if err := d.DeleteSystemPromptHistory("X"); err == nil {
+			t.Error("expected error")
+		}
+	})
+}
