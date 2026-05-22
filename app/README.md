@@ -1,19 +1,24 @@
-# README
+# MockAgent App
 
-## About
+这里是 MockAgent 的 Wails v2 应用子模块。根目录的 [README.md](../README.md) 说明了完整的配置、功能和运行方式。
 
-This is the official Wails Vanilla template.
+## 常用命令
 
-You can configure the project by editing `wails.json`. More information about the project settings can be found
-here: https://wails.io/docs/reference/project-config
+```pwsh
+# 首次检出或清理后，先生成 frontend/dist 供 Go embed 使用
+cd frontend
+npm install
+npm run build
+cd ..
 
-## Live Development
+# 后端单元测试
+go test ./...
 
-To run in live development mode, run `wails dev` in the project directory. This will run a Vite development
-server that will provide very fast hot reload of your frontend changes. If you want to develop in a browser
-and have access to your Go methods, there is also a dev server that runs on http://localhost:34115. Connect
-to this in your browser, and you can call your Go code from devtools.
+# 开发模式
+wails dev
 
-## Building
+# 生产构建
+wails build
+```
 
-To build a redistributable, production mode package, use `wails build`.
+`frontend/wailsjs/` 与 `frontend/dist/` 都是生成目录；`wails dev` / `wails build` 会按需生成。

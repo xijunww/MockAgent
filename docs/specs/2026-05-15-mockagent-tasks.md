@@ -3,13 +3,14 @@
 **关联设计**：`2026-05-15-mockagent-design.md`
 **关联需求**：`2026-05-15-mockagent-requirements.md`
 **实现语言**：Go（后端） + 原生 HTML/CSS/JS（前端）
+**维护备注**：2026-05-22 已同步当前依赖策略：腾讯云语音 SDK 使用官方 Go module，不再随仓库提交本地源码副本。
 
 > 把功能设计转化为一系列代码生成提示，每个提示在前一步基础上增量推进，最终把所有部件接入主程序。本任务列表只关注涉及编写、修改或测试代码的任务。带 `*` 后缀的子任务为可选测试任务，编码代理在常规执行中可跳过；带具体属性编号的属性测试任务必须直接引用 design.md 中的属性。
 
 ## 任务
 
 - [ ] 1. 搭建 Go module 与项目骨架
-  - 在仓库根目录新建 `app/` 子模块（独立 `go.mod`），使用 `replace` 指向本地 `tencentcloud-speech-sdk-go`
+  - 在仓库根目录新建 `app/` 子模块（独立 `go.mod`），直接依赖官方 `github.com/tencentcloud/tencentcloud-speech-sdk-go` module
   - 初始化 Wails v2 项目（`wails init -n MockAgent -t vanilla`），把生成的 `frontend/`、`main.go`、`app.go`、`wails.json` 落入 `app/` 目录
   - 创建 `internal/` 子包目录骨架：`config/`、`hotkey/`、`recorder/`、`asr/`、`llm/`、`conversation/`、`tray/`
   - 添加根目录 `config.example.json`（与设计 6.1 字段一致，全部使用占位值）与 `.gitignore` 中忽略 `config.json`
@@ -114,7 +115,7 @@
 - [ ] 6. 实现 ASR 模块 `internal/asr`
   - [ ] 6.1 封装腾讯云 `FlashRecognizer`
     - 接口 `Client` 与 `TencentClient` 实现：`Recognize(ctx context.Context, pcm []byte) (string, error)`
-    - 内部使用 `tencentcloud-speech-sdk-go/asr.NewFlashRecognizer(appID, credential)`、`Recognize(req)`，参数：`EngSerViceType=16k_zh`、`VoiceFormat=pcm`、`SpeechData` 设为传入 PCM
+    - 内部使用 `github.com/tencentcloud/tencentcloud-speech-sdk-go/asr.NewFlashRecognizer(appID, credential)`、`Recognize(req, pcm)`，参数：`EngineType=16k_zh`、`VoiceFormat=pcm`
     - 错误分类：网络错误、鉴权错误、配额错误、空结果，全部封装为 `*asr.Error`
     - 实现 `func (c *TencentClient) DispatchResult(text string) (write bool, normalized string)` 用于"空白结果不回填"判定
     - _Requirements: 4.3, 4.4, 4.6, 4.7, 10.2_
@@ -264,7 +265,7 @@
   - [ ] 11.7 实现 NewConversation / GetConfig / OpenConfigFile / ReloadConfig / ExportConversation
     - `NewConversation`：取消进行中的 LLM_Stream，重置 Conversation_Store，发事件清空前端
     - `GetConfig`：返回掩码后的 Config 视图
-    - `ReloadConfig`：重载 Config；如果 hotkey 变化则注销旧 spec 并注册新 spec；不打断进行中的录音/流
+    - `ReloadConfig`：重载 Config；如果任一 hotkey 变化则注销旧 spec 并注册新 spec；不打断进行中的录音/流
     - `ExportConversation`：调用 `runtime.SaveFileDialog` 取得路径，写文件
     - _Requirements: 1.4, 1.5, 1.6, 1.7, 6.3, 7.1, 7.2, 7.3_
 

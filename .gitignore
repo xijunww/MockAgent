@@ -37,6 +37,12 @@ output.json
 # 用户实际配置文件（含密钥），永远不提交
 /config.json
 app/config.json
+/documents.json
+/documents.json.bak
+/documents/
+app/documents.json
+app/documents.json.bak
+app/documents/
 
 # Wails 构建产物与前端依赖
 app/build/bin/

@@ -73,12 +73,15 @@ type App struct {
 	docsMgr      *docs.Manager // 参考文档管理
 
 	// 录音 / ASR 状态。
-	asrSession atomic.Int64    // 当前 ASR session id；新一轮 Press 自增以丢弃旧结果
-	recording  atomic.Bool     // 当前是否处于录音中（用于发送热键的拒绝逻辑）
+	asrSession atomic.Int64 // 当前 ASR session id；新一轮 Press 自增以丢弃旧结果
+	recording  atomic.Bool  // 当前是否处于录音中（用于发送热键的拒绝逻辑）
 
 	// LLM 流并发控制。
 	llmMu     sync.Mutex
 	llmCancel context.CancelFunc
+
+	// 主窗口关闭行为：点窗口关闭按钮时隐藏到托盘，托盘菜单退出时真正关闭。
+	quitting atomic.Bool
 }
 
 // NewApp 创建 App，但不会启动任何业务（业务在 startup 中启动以使用 Wails ctx）。
@@ -128,16 +131,22 @@ func (a *App) startup(ctx context.Context) {
 		OnShowWindow:      func() { rt.WindowShow(a.ctx) },
 		OnNewConversation: func() { a.NewConversation() },
 		OnOpenConfig:      func() { _ = a.OpenConfigFile() },
-		OnQuit:            func() { rt.Quit(a.ctx) },
+		OnQuit: func() {
+			a.quitting.Store(true)
+			rt.Quit(a.ctx)
+		},
 	})
 	a.trayMgr.Start()
 }
 
 // beforeClose 在主窗口关闭前调用。
-// 返回 false 让 Wails 正常关闭（触发 OnShutdown，进而注销热键等）。
+// 点窗口关闭按钮时隐藏到托盘；托盘菜单触发退出时才让 Wails 正常关闭。
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
-	_ = ctx
-	return false
+	if a.quitting.Load() {
+		return false
+	}
+	rt.WindowHide(ctx)
+	return true
 }
 
 // shutdown 在 Wails 退出前调用（OnShutdown 钩子）。
@@ -257,7 +266,7 @@ func (a *App) rebuildClients() {
 	}
 }
 
-// applyHotkeyConfig 把当前 Config 中的两个热键应用到对应 Manager。
+// applyHotkeyConfig 把当前 Config 中的三个热键应用到对应 Manager。
 //
 // 任一热键解析或注册失败都会通过 EventConfigStatus 通知前端，但不会阻止
 // 应用继续运行（用户仍可用 UI 按钮录音 / 鼠标点发送按钮）。
@@ -632,7 +641,7 @@ func (a *App) GetConfig() map[string]any {
 
 // UpdateHotkey 修改并持久化指定 kind 的热键。
 //
-// kind: HotkeyKindRecord 或 HotkeyKindSend；
+// kind: HotkeyKindRecord、HotkeyKindSend 或 HotkeyKindSystem；
 // raw:  快捷键字符串（如 "F2" / "Ctrl+Alt+Space"）。
 //
 // 流程：解析 raw → 检查是否与另一个热键冲突 → 写回 config.json →
@@ -1002,7 +1011,7 @@ func (a *App) recoverPanic(stage string) {
 		switch stage {
 		case "llm", "send-message":
 			a.emit(EventLLMError, map[string]any{"error": msg})
-		case "asr", "hotkey-press", "hotkey-release":
+		case "asr", "hotkey-press", "hotkey-release", "hotkey-system-press", "hotkey-system-release":
 			a.emit(EventASRError, map[string]any{"error": msg})
 		default:
 			a.emit(EventConfigStatus, map[string]any{"ok": false, "error": msg})

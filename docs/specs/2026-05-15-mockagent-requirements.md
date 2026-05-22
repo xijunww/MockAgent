@@ -3,6 +3,7 @@
 **日期**：2026-05-15
 **关联设计**：`2026-05-15-mockagent-design.md`
 **状态**：基于已批准设计派生
+**维护备注**：2026-05-22 已同步当前实现中的三类热键、系统提示词新字段，以及腾讯云 SDK 远程 module 依赖。
 
 ## 简介
 
@@ -26,7 +27,7 @@ MockAgent 是一款基于 Wails v2 的 Windows/跨平台桌面助手。用户在
 - **PCM_Buffer**：单次 `Recording_Session` 累积的 16kHz、单声道、16 位带符号 PCM 数据 `[]byte`。
 - **Min_Duration_Ms**：`config.audio.min_duration_ms`（默认 300），低于该时长的录音视为无效。
 - **Message**：见设计 6.4 的 `Message` 结构体（`role`、`content`、可选 `reasoning_content`）。
-- **System_Prompt**：`config.deepseek.system_prompt`，作为每个新会话第一条 `role=system` 消息的内容。
+- **System_Prompt**：`config.deepseek.active_system_prompt`，由 `system_prompt_history` 中的当前活跃项决定，并在发送给 LLM 前即时拼接为 `role=system` 消息。
 - **LLM_Stream**：`LLM_Client` 一次流式调用产生的 delta 序列。
 - **Hidden_Field**：在序列化或日志输出中**不得**出现明文值的字段，包括 `tencent.secret_id`、`tencent.secret_key`、`deepseek.api_key`。
 
@@ -40,9 +41,9 @@ MockAgent 是一款基于 Wails v2 的 Windows/跨平台桌面助手。用户在
 
 1. WHEN MockAgent_App 启动且 `config.json` 不存在，THE Config_Loader SHALL 从同目录的 `config.example.json` 复制一份 `config.json` 并继续启动流程。
 2. WHEN MockAgent_App 启动且 `config.json` 存在但 JSON 解析失败，THE App_Coordinator SHALL 在 Frontend_UI 显示错误页并提供"打开配置文件"按钮，且不进入正常聊天界面。
-3. WHEN Config_Loader 加载配置，THE Config_Loader SHALL 先读取 `config.json` 的字段值，再用环境变量 `TENCENT_APP_ID`、`TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`、`MOCK_AGENT_HOTKEY` 中已设置的项覆盖对应字段。
+3. WHEN Config_Loader 加载配置，THE Config_Loader SHALL 先读取 `config.json` 的字段值，再用环境变量 `TENCENT_APP_ID`、`TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`、`MOCK_AGENT_RECORD_HOTKEY`、`MOCK_AGENT_SEND_HOTKEY`、`MOCK_AGENT_SYSTEM_HOTKEY` 中已设置的项覆盖对应字段；旧环境变量 `MOCK_AGENT_HOTKEY` 仅兼容覆盖录音热键。
 4. WHEN 前端调用 `ReloadConfig()`，THE App_Coordinator SHALL 重新执行 Config_Loader 的加载流程，得到新的 Config 对象。
-5. WHEN `ReloadConfig()` 后新的 `hotkey` 与旧 Hotkey_Spec 不同，THE Hotkey_Manager SHALL 注销旧热键并注册新 Hotkey_Spec。
+5. WHEN `ReloadConfig()` 后任一热键（`record_hotkey` / `send_hotkey` / `system_hotkey`）与旧 Hotkey_Spec 不同，THE Hotkey_Manager SHALL 注销旧热键并注册新 Hotkey_Spec。
 6. WHEN `ReloadConfig()` 在录音或 LLM_Stream 进行中被调用，THE App_Coordinator SHALL 不中断当前 Recording_Session 与 LLM_Stream，且新的 ASR/LLM 配置仅在下次调用时生效。
 7. WHEN 前端调用 `OpenConfigFile()`，THE App_Coordinator SHALL 通过系统默认编辑器打开 `config.json` 文件。
 8. THE Config_Loader SHALL 在任何错误信息、日志输出与 `GetConfig()` 返回值中以掩码形式（例如固定字符串 `***`）表示 Hidden_Field 的值。
@@ -116,7 +117,7 @@ MockAgent 是一款基于 Wails v2 的 Windows/跨平台桌面助手。用户在
 
 #### 验收准则
 
-1. WHEN MockAgent_App 启动或 `NewConversation()` 被调用，THE Conversation_Store SHALL 把内部 messages 列表重置为仅包含一条 `role="system"`、`content=System_Prompt` 的 Message（若 System_Prompt 为空则为空列表）。
+1. WHEN MockAgent_App 启动或 `NewConversation()` 被调用，THE Conversation_Store SHALL 把内部 messages 列表重置为空；THE App_Coordinator SHALL 在下一次发送给 LLM 前把当前 System_Prompt 拼接为第一条 `role="system"` Message（若 System_Prompt 为空则不拼接）。
 2. THE Conversation_Store SHALL 按追加顺序保存所有 user 与 assistant Message，使每次 `SendMessage` 调用都能取到完整历史。
 3. WHEN Frontend_UI 调用 `NewConversation()`，THE App_Coordinator SHALL 取消任何进行中的 LLM_Stream，调用 Conversation_Store 重置，并通知 Frontend_UI 清空聊天列表。
 4. THE Conversation_Store SHALL 不持久化历史到磁盘（重启后历史不恢复，与第一版范围一致）。

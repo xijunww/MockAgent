@@ -8,9 +8,12 @@
     "api_key": "",
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-pro",
-    "thinking": "disabled",
+    "thinking": "enabled",
     "reasoning_effort": "medium",
-    "system_prompt": "You are a helpful assistant."
+    "system_prompt_history": [
+      "You are a helpful assistant."
+    ],
+    "active_system_prompt": "You are a helpful assistant."
   },
   "record_hotkey": "F2",
   "send_hotkey": "F4",

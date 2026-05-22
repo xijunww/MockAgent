@@ -1,27 +1,30 @@
 # MockAgent
 
-一个本地运行的桌面语音对话助手：按住快捷键说话 → 腾讯云语音识别转文字 → 发给 DeepSeek 大模型流式回答。
+MockAgent 是一个本地运行的桌面语音对话助手：按住快捷键录音，将麦克风或系统声音转写为文字，审阅后发送给 DeepSeek，并流式显示回答。
 
 - 后端：Go + Wails v2
 - 录音：`malgo`（16 kHz 单声道 PCM）
-- 语音识别：腾讯云 [tencentcloud-speech-sdk-go](./tencentcloud-speech-sdk-go)（FlashRecognizer）
+- 语音识别：腾讯云 `github.com/tencentcloud/tencentcloud-speech-sdk-go`（FlashRecognizer）
 - 大模型：DeepSeek `deepseek-v4-pro`（OpenAI 兼容 SSE 流式）
 - 全局热键：`golang.design/x/hotkey`
 - 系统托盘：`getlantern/systray`
 
 ## 功能
 
-- 全局快捷键（默认 **F2**）按住录音、松开识别，窗口失焦也能用
-- 识别结果回填到输入框，用户审阅 / 编辑后再点击发送
-- AI 回答以打字机效果流式渲染，支持 Markdown 与代码高亮（含一键复制）
-- 思考过程默认折叠，显示"已思考 N 秒"，可点开查看
-- 关闭主窗口最小化到系统托盘（热键继续工作），托盘菜单可"显示主窗口 / 新建对话 / 打开配置 / 退出"
-- 导出对话为 Markdown 或 JSON
-- 输入框右侧有 🎤 备用按钮，按住时与全局热键等价
+- 默认按住 **F2** 录麦克风，松开后调用腾讯云 ASR，并把结果回填到输入框
+- 默认按住 **F3** 录系统声音，适合会议、面试等场景里的对方语音
+- 默认按 **F4** 直接发送当前输入框内容；输入为空或正在生成时会被拒绝
+- 输入框右侧的麦克风按钮与 F2 录音等价
+- AI 回答流式渲染，支持 Markdown、代码高亮和代码块一键复制
+- 支持 DeepSeek thinking 内容折叠展示（启用 `thinking` 时）
+- 支持编辑系统提示词，并保留提示词历史
+- 支持添加参考文档，启用的文档会拼接到 system prompt 后发送给模型
+- 支持导出当前对话为 Markdown 或 JSON
+- 系统托盘提供显示主窗口、新建对话、打开配置和退出入口
 
 ## 配置
 
-第一次启动时如果没有 `config.json`，程序会从 `config.example.json` 复制一份。请编辑里面的密钥：
+第一次启动时如果没有 `config.json`，程序会从 `config.example.json` 复制一份。请编辑复制出的 `config.json` 并填入密钥。当前推荐配置结构如下：
 
 ```json
 {
@@ -36,9 +39,14 @@
     "model": "deepseek-v4-pro",
     "thinking": "enabled",
     "reasoning_effort": "medium",
-    "system_prompt": "You are a helpful assistant."
+    "system_prompt_history": [
+      "You are a helpful assistant."
+    ],
+    "active_system_prompt": "You are a helpful assistant."
   },
-  "hotkey": "F2",
+  "record_hotkey": "F2",
+  "send_hotkey": "F4",
+  "system_hotkey": "F3",
   "audio": {
     "sample_rate": 16000,
     "channels": 1,
@@ -47,7 +55,9 @@
 }
 ```
 
-也可以用环境变量覆盖（优先级高于文件）：
+旧版 `hotkey` 和 `deepseek.system_prompt` 字段仍可被读取并迁移；新配置请使用 `record_hotkey`、`send_hotkey`、`system_hotkey`、`system_prompt_history` 和 `active_system_prompt`。
+
+也可以用环境变量覆盖部分字段（优先级高于文件）：
 
 | 字段 | 环境变量 |
 |------|----------|
@@ -57,17 +67,21 @@
 | `deepseek.api_key` | `DEEPSEEK_API_KEY` |
 | `deepseek.model` | `DEEPSEEK_MODEL` |
 | `deepseek.base_url` | `DEEPSEEK_BASE_URL` |
-| `hotkey` | `MOCK_AGENT_HOTKEY` |
+| `record_hotkey` | `MOCK_AGENT_RECORD_HOTKEY` |
+| `send_hotkey` | `MOCK_AGENT_SEND_HOTKEY` |
+| `system_hotkey` | `MOCK_AGENT_SYSTEM_HOTKEY` |
+
+`MOCK_AGENT_HOTKEY` 仍作为旧环境变量兼容，只会覆盖录音热键。
 
 ### 快捷键格式
 
-- 单键：`F1`–`F12`、`Space`
+- 单键：`F1`-`F12`、`Space`
 - 组合键：`Ctrl+Alt+Space`、`Ctrl+Shift+R`、`Alt+Q` 等
 - 修饰键支持 `Ctrl` / `Control` / `Alt` / `Shift` / `Win` / `Super` / `Meta`，大小写不敏感
 
 ## 开发环境
 
-- Go 1.21+（项目使用 1.23）
+- Go 1.24.1（与 `app/go.mod` 保持一致）
 - Node.js 18+
 - Windows 上需要一份较新的 GCC，例如 [winlibs MinGW-w64 GCC 14](https://github.com/brechtsanders/winlibs_mingw/releases) 解压到 `C:\tools\mingw64`，把 `bin/` 加到 PATH
 
@@ -84,10 +98,16 @@ wails doctor
 ```pwsh
 cd app
 
-# 跑测试（仅后端单元测试，运行很快）
+# 首次检出或清理后，先生成 frontend/dist 供 Go embed 使用
+cd frontend
+npm install
+npm run build
+cd ..
+
+# 后端单元测试
 go test ./...
 
-# 开发模式（热重载前端）
+# 开发模式
 wails dev
 
 # 生产构建
@@ -95,38 +115,37 @@ wails build
 # 产物在 app\build\bin\app.exe
 ```
 
-`config.json` 的查找顺序：可执行文件同目录 → 当前工作目录 → 上一级目录。开发模式 (`wails dev`) 把 `config.json` 放在仓库根目录最方便。
+`config.json` 的查找顺序：可执行文件同目录 -> 当前工作目录 -> 上一级目录。开发模式 (`wails dev`) 把 `config.json` 放在仓库根目录最方便。
 
 ## 项目结构
 
 ```
 MockAgent/
-├── tencentcloud-speech-sdk-go/    # 腾讯云语音 SDK 源码（go.mod replace 指向本地）
 ├── app/
-│   ├── main.go / app.go           # Wails 入口与协调器
+│   ├── main.go / app.go           # Wails 入口与后端协调器
 │   ├── internal/
 │   │   ├── config/                # 配置加载、环境变量覆盖、密钥掩码
 │   │   ├── hotkey/                # 快捷键解析、按下/松开去重、注册
-│   │   ├── recorder/              # malgo 录音（实现 + Fake 测试用）
+│   │   ├── recorder/              # 麦克风与系统声音录制
 │   │   ├── asr/                   # 腾讯云 FlashRecognizer 封装
 │   │   ├── llm/                   # DeepSeek SSE 流式调用
-│   │   ├── conversation/          # 会话历史 + Markdown/JSON 导出
-│   │   └── tray/                  # 系统托盘（独立 goroutine）
+│   │   ├── conversation/          # 会话历史与导出
+│   │   ├── docs/                  # 参考文档提取、索引和拼接
+│   │   └── tray/                  # 系统托盘
 │   ├── frontend/
-│   │   ├── index.html / src/      # 原生 HTML / CSS / JS（深色主题）
-│   │   └── wailsjs/               # Wails 自动生成的前后端绑定
-│   └── build/                     # 图标、构建产物
-├── docs/specs/                    # 设计文档与任务列表
+│   │   ├── index.html / src/      # 原生 HTML / CSS / JS
+│   │   └── wailsjs/               # Wails 自动生成，未提交
+│   ├── build/                     # 图标与平台构建配置
+│   └── go.mod                     # app 子模块依赖
+├── docs/specs/                    # 设计文档、需求文档与任务列表
 ├── config.example.json            # 配置模板
 └── README.md
 ```
+
+腾讯云语音 SDK 现在通过官方 Go module 引入，不再在仓库中提交 `tencentcloud-speech-sdk-go/` 源码目录。
 
 ## 文档
 
 - [设计文档](docs/specs/2026-05-15-mockagent-design.md)
 - [需求文档](docs/specs/2026-05-15-mockagent-requirements.md)
 - [任务列表](docs/specs/2026-05-15-mockagent-tasks.md)
-
-## 许可
-
-腾讯云 SDK 部分版权属于腾讯，许可见 [tencentcloud-speech-sdk-go/LICENSE](tencentcloud-speech-sdk-go/LICENSE)。

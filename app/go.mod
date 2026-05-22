@@ -7,7 +7,7 @@ require (
 	github.com/getlantern/systray v1.2.2
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/oklog/ulid/v2 v2.1.1
-	github.com/tencentcloud/tencentcloud-speech-sdk-go v0.0.0-00010101000000-000000000000
+	github.com/tencentcloud/tencentcloud-speech-sdk-go v1.0.25
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.design/x/hotkey v0.4.1
 )
@@ -50,6 +50,3 @@ require (
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 )
-
-// 指向本地腾讯云语音 SDK，避免拉取外部仓库
-replace github.com/tencentcloud/tencentcloud-speech-sdk-go => ../tencentcloud-speech-sdk-go

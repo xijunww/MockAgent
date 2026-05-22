@@ -2,6 +2,7 @@
 
 **日期**：2026-05-15
 **状态**：已批准，进入实现阶段
+**维护备注**：2026-05-22 已同步当前实现：腾讯云语音 SDK 改为官方 Go module 依赖，热键拆分为录音 / 系统声音 / 发送三类，系统提示词改为历史列表 + 当前活跃项。
 
 ## 1. 目标
 
@@ -47,7 +48,6 @@
 
 ```
 MockAgent/
-├── tencentcloud-speech-sdk-go/    # 已有的腾讯云 SDK 源码（用 replace 指向本地）
 ├── app/                            # 主程序
 │   ├── go.mod
 │   ├── main.go                     # Wails 入口
@@ -60,6 +60,7 @@ MockAgent/
 │   │   ├── asr/asr.go              # 封装 FlashRecognizer
 │   │   ├── llm/deepseek.go         # DeepSeek 流式调用
 │   │   ├── conversation/conv.go    # 会话历史管理 + 导出
+│   │   ├── docs/docs.go            # 参考文档管理
 │   │   └── tray/tray.go            # 系统托盘
 │   └── frontend/
 │       ├── index.html
@@ -76,7 +77,7 @@ MockAgent/
 | 模块 | 输入 | 输出 | 依赖 |
 |------|------|------|------|
 | `config` | 配置文件 + 环境变量 | `Config` 结构体 | - |
-| `hotkey` | 配置中的快捷键名 | OnPress / OnRelease 回调 | golang.design/x/hotkey |
+| `hotkey` | 配置中的录音 / 系统声音 / 发送快捷键 | OnPress / OnRelease / OnSend 回调 | golang.design/x/hotkey |
 | `recorder` | 开始/停止指令 | 完整 PCM `[]byte`（停止时返回） | malgo |
 | `asr` | PCM `[]byte` | 识别文本 string | 腾讯云 SDK |
 | `llm` | messages 历史 | SSE 文本片段流（`chan Delta`） | net/http |
@@ -111,9 +112,14 @@ MockAgent/
     "model": "deepseek-v4-pro",
     "thinking": "enabled",
     "reasoning_effort": "medium",
-    "system_prompt": "You are a helpful assistant."
+    "system_prompt_history": [
+      "You are a helpful assistant."
+    ],
+    "active_system_prompt": "You are a helpful assistant."
   },
-  "hotkey": "F2",
+  "record_hotkey": "F2",
+  "send_hotkey": "F4",
+  "system_hotkey": "F3",
   "audio": {
     "sample_rate": 16000,
     "channels": 1,
@@ -126,7 +132,8 @@ MockAgent/
 
 - `TENCENT_APP_ID` / `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY`
 - `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` / `DEEPSEEK_BASE_URL`
-- `MOCK_AGENT_HOTKEY`
+- `MOCK_AGENT_RECORD_HOTKEY` / `MOCK_AGENT_SEND_HOTKEY` / `MOCK_AGENT_SYSTEM_HOTKEY`
+- `MOCK_AGENT_HOTKEY` 仅作为旧录音热键环境变量兼容
 
 ### 6.3 快捷键格式
 
@@ -164,7 +171,7 @@ type Message struct {
 - `NewConversation()` - 清空当前会话历史，重新初始化 system prompt
 - `GetConfig()` - 读取当前配置（用于 UI 显示快捷键等）
 - `OpenConfigFile()` - 在系统编辑器中打开 `config.json`
-- `ReloadConfig()` - 重新加载配置（无需重启程序）；语义：重读 `config.json` 与环境变量；如果 `hotkey` 变化则重新注册全局热键；其余字段下次调用 ASR/LLM 时自动生效；不会中断当前正在进行的录音或 LLM 流
+- `ReloadConfig()` - 重新加载配置（无需重启程序）；语义：重读 `config.json` 与环境变量；如果任一热键变化则重新注册对应全局热键；其余字段下次调用 ASR/LLM 时自动生效；不会中断当前正在进行的录音或 LLM 流
 - `ExportConversation(format string)` - `format` 为 `"md"` 或 `"json"`，弹出系统保存对话框
 
 ## 7. UI 设计
@@ -262,7 +269,7 @@ type Message struct {
 
 ### 属性 2：文件值与环境变量合并的覆盖语义
 
-**对任何** 文件 Config *f* 与任意环境变量子集 *E*（仅含 `TENCENT_APP_ID`、`TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`、`MOCK_AGENT_HOTKEY`），令 *m = merge(f, E)*。则对每个被 *E* 设置的字段 *k*，*m[k]* 等于 *E[k]*；对未在 *E* 中设置的字段 *k*，*m[k]* 等于 *f[k]*。
+**对任何** 文件 Config *f* 与任意环境变量子集 *E*（仅含 `TENCENT_APP_ID`、`TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`、`DEEPSEEK_BASE_URL`、`MOCK_AGENT_RECORD_HOTKEY`、`MOCK_AGENT_SEND_HOTKEY`、`MOCK_AGENT_SYSTEM_HOTKEY`，以及兼容旧名 `MOCK_AGENT_HOTKEY`），令 *m = merge(f, E)*。则对每个被 *E* 设置的字段 *k*，*m[k]* 等于 *E[k]*；对未在 *E* 中设置的字段 *k*，*m[k]* 等于 *f[k]*。
 
 **Validates: Requirements 1.3, 1.4**
 
@@ -352,7 +359,7 @@ type Message struct {
 
 ### 属性 17：NewConversation 重置
 
-**对任何** System_Prompt *p* 与任意已存在的 messages 列表 *M*，`NewConversation()` 之后 Conversation_Store 的 messages 应等于：当 *p* 为空时为空列表；当 *p* 非空时为 `[{role:"system", content:p}]`。
+**对任何** 任意已存在的 messages 列表 *M*，`NewConversation()` 之后 Conversation_Store 的 messages 应为空；当前 active system prompt 在下一次 `SendMessage()` 时即时拼接到发送给 LLM 的消息副本中。
 
 **Validates: Requirement 6.1**
 
