@@ -55,6 +55,24 @@ func TestFakeRecorder_PushIgnoredWhenIdle(t *testing.T) {
 	}
 }
 
+func TestNewLoopbackSetsSystemMode(t *testing.T) {
+	r := NewLoopback(DefaultConfig())
+	if r.cfg.Mode != ModeSystem {
+		t.Errorf("NewLoopback should force Mode=ModeSystem, got %v", r.cfg.Mode)
+	}
+	// 也应当保留传入的其它默认值。
+	if r.cfg.SampleRate != DefaultSampleRate || r.cfg.Channels != DefaultChannels {
+		t.Errorf("NewLoopback should keep other defaults, got %+v", r.cfg)
+	}
+}
+
+func TestNewKeepsMicrophoneMode(t *testing.T) {
+	r := New(DefaultConfig())
+	if r.cfg.Mode != ModeMicrophone {
+		t.Errorf("New with DefaultConfig should be ModeMicrophone, got %v", r.cfg.Mode)
+	}
+}
+
 func TestShouldRecognize(t *testing.T) {
 	// 16kHz mono s16: 1 second = 32000 bytes, 300 ms = 9600 bytes (rounding fine).
 	cases := []struct {

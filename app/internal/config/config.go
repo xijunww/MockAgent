@@ -33,6 +33,7 @@ const (
 	EnvHotkey       = "MOCK_AGENT_HOTKEY"
 	EnvRecordHotkey = "MOCK_AGENT_RECORD_HOTKEY"
 	EnvSendHotkey   = "MOCK_AGENT_SEND_HOTKEY"
+	EnvSystemHotkey = "MOCK_AGENT_SYSTEM_HOTKEY"
 )
 
 // Tencent 腾讯云语音 SDK 凭证。
@@ -80,6 +81,7 @@ type Config struct {
 	DeepSeek      DeepSeek `json:"deepseek"`
 	RecordHotkey  string   `json:"record_hotkey"`
 	SendHotkey    string   `json:"send_hotkey"`
+	SystemHotkey  string   `json:"system_hotkey"`
 	Audio         Audio    `json:"audio"`
 
 	// LegacyHotkey 仅用于读取旧字段做向后兼容；写入时不再使用。
@@ -97,6 +99,7 @@ const MaskedString = "***"
 const (
 	DefaultRecordHotkey = "F2"
 	DefaultSendHotkey   = "F4"
+	DefaultSystemHotkey = "F3"
 )
 
 // Default 提供录音参数等字段的默认值。
@@ -112,6 +115,7 @@ func Default() Config {
 		},
 		RecordHotkey: DefaultRecordHotkey,
 		SendHotkey:   DefaultSendHotkey,
+		SystemHotkey: DefaultSystemHotkey,
 		Audio: Audio{
 			SampleRate:    16000,
 			Channels:      1,
@@ -135,12 +139,12 @@ func (c Config) String() string {
 	return fmt.Sprintf("Config{Tencent:{AppID:%q SecretID:%s SecretKey:%s} "+
 		"DeepSeek:{APIKey:%s BaseURL:%q Model:%q Thinking:%q ReasoningEffort:%q "+
 		"PromptHistory:%d ActivePromptLen:%d} "+
-		"RecordHotkey:%q SendHotkey:%q Audio:%+v Source:%q}",
+		"RecordHotkey:%q SendHotkey:%q SystemHotkey:%q Audio:%+v Source:%q}",
 		masked.Tencent.AppID, masked.Tencent.SecretID, masked.Tencent.SecretKey,
 		masked.DeepSeek.APIKey, masked.DeepSeek.BaseURL, masked.DeepSeek.Model,
 		masked.DeepSeek.Thinking, masked.DeepSeek.ReasoningEffort,
 		len(masked.DeepSeek.SystemPromptHistory), len(masked.DeepSeek.ActiveSystemPrompt),
-		masked.RecordHotkey, masked.SendHotkey, masked.Audio, masked.sourcePath,
+		masked.RecordHotkey, masked.SendHotkey, masked.SystemHotkey, masked.Audio, masked.sourcePath,
 	)
 }
 
@@ -233,12 +237,15 @@ func Load(dir string) (*Config, error) {
 	}
 	cfg.LegacyHotkey = ""
 
-	// 仍允许 SendHotkey 缺省。
+	// 仍允许 SendHotkey / SystemHotkey 缺省。
 	if cfg.SendHotkey == "" {
 		cfg.SendHotkey = DefaultSendHotkey
 	}
 	if cfg.RecordHotkey == "" {
 		cfg.RecordHotkey = DefaultRecordHotkey
+	}
+	if cfg.SystemHotkey == "" {
+		cfg.SystemHotkey = DefaultSystemHotkey
 	}
 
 	// 系统提示词迁移：如果文件里只有旧 system_prompt 字段，没有 history/active，
@@ -327,6 +334,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v, ok := os.LookupEnv(EnvSendHotkey); ok {
 		cfg.SendHotkey = v
+	}
+	if v, ok := os.LookupEnv(EnvSystemHotkey); ok {
+		cfg.SystemHotkey = v
 	}
 }
 

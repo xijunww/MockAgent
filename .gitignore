@@ -26,6 +26,8 @@ go.work.sum
 
 # env file
 .env
+xcheck-input.json
+output.json
 
 # Editor/IDE
 # .idea/

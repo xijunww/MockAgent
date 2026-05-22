@@ -59,6 +59,38 @@ func TestValidateHotkeyChange(t *testing.T) {
 	if err := validateHotkeyChange(cfg4, HotkeyKindRecord, "F2"); err != nil {
 		t.Errorf("empty other should pass, got %v", err)
 	}
+
+	// 三方冲突覆盖：record / send / system 互相不能撞键。
+	cfg5 := &config.Config{RecordHotkey: "F2", SendHotkey: "F4", SystemHotkey: "F3"}
+
+	// system 改为现有 record → 冲突
+	if err := validateHotkeyChange(cfg5, HotkeyKindSystem, "F2"); err == nil ||
+		!strings.Contains(err.Error(), "已被") {
+		t.Errorf("system vs record conflict not detected, got %v", err)
+	}
+	// system 改为现有 send → 冲突
+	if err := validateHotkeyChange(cfg5, HotkeyKindSystem, "F4"); err == nil ||
+		!strings.Contains(err.Error(), "已被") {
+		t.Errorf("system vs send conflict not detected, got %v", err)
+	}
+	// record 改为现有 system → 冲突
+	if err := validateHotkeyChange(cfg5, HotkeyKindRecord, "F3"); err == nil ||
+		!strings.Contains(err.Error(), "已被") {
+		t.Errorf("record vs system conflict not detected, got %v", err)
+	}
+	// send 改为现有 system → 冲突
+	if err := validateHotkeyChange(cfg5, HotkeyKindSend, "F3"); err == nil ||
+		!strings.Contains(err.Error(), "已被") {
+		t.Errorf("send vs system conflict not detected, got %v", err)
+	}
+	// system 改为不冲突的新键 → 通过
+	if err := validateHotkeyChange(cfg5, HotkeyKindSystem, "Ctrl+Alt+J"); err != nil {
+		t.Errorf("non-conflicting system change: %v", err)
+	}
+	// system 改为自身 → 不视为冲突
+	if err := validateHotkeyChange(cfg5, HotkeyKindSystem, "F3"); err != nil {
+		t.Errorf("setting system to its current value should pass, got %v", err)
+	}
 }
 
 

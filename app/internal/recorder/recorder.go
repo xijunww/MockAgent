@@ -16,6 +16,29 @@ const (
 	DefaultBytesPerSample = 2 // s16
 )
 
+// Mode 选择采集来源：麦克风 or 系统声音环回。
+type Mode int
+
+const (
+	// ModeMicrophone 通过 malgo.Capture 采集默认输入设备（麦克风）。
+	ModeMicrophone Mode = iota
+	// ModeSystem 通过 malgo.Loopback 采集默认输出设备正在播放的声音
+	// （Windows WASAPI 环回；其它平台 malgo 自身不支持时会返回错误）。
+	ModeSystem
+)
+
+// String 仅用于错误信息与日志。
+func (m Mode) String() string {
+	switch m {
+	case ModeMicrophone:
+		return "microphone"
+	case ModeSystem:
+		return "system"
+	default:
+		return "unknown"
+	}
+}
+
 // ErrAlreadyRecording 当一个录音 Session 进行时，再次调用 Start 返回此错误。
 var ErrAlreadyRecording = errors.New("recorder: 已经在录音")
 
@@ -39,14 +62,16 @@ type Config struct {
 	SampleRate     uint32
 	Channels       uint32
 	BytesPerSample int // 仅用于 ShouldRecognize 等纯逻辑判定；malgo 固定使用 s16
+	Mode           Mode
 }
 
-// DefaultConfig 返回与 design.md 一致的默认参数。
+// DefaultConfig 返回与 design.md 一致的默认参数（麦克风模式）。
 func DefaultConfig() Config {
 	return Config{
 		SampleRate:     DefaultSampleRate,
 		Channels:       DefaultChannels,
 		BytesPerSample: DefaultBytesPerSample,
+		Mode:           ModeMicrophone,
 	}
 }
 
@@ -76,6 +101,13 @@ func New(cfg Config) *MalgoRecorder {
 	return &MalgoRecorder{cfg: cfg}
 }
 
+// NewLoopback 是 New 的便捷构造，把 Mode 强制设为 ModeSystem，
+// 让调用点意图明确（"采集系统正在播放的声音"）。
+func NewLoopback(cfg Config) *MalgoRecorder {
+	cfg.Mode = ModeSystem
+	return New(cfg)
+}
+
 // initContext 创建 malgo context（懒加载），返回的 context 由 r.ctx 持有。
 // 必须在持有 r.mu 的状态下调用，或在调用方保证串行的位置调用。
 func (r *MalgoRecorder) initContext() error {
@@ -90,16 +122,24 @@ func (r *MalgoRecorder) initContext() error {
 	return nil
 }
 
-// Probe 探测系统是否存在可用音频输入设备。
+// Probe 探测系统是否存在可用音频设备。
+//   - ModeMicrophone：枚举 Capture（输入）设备。
+//   - ModeSystem：枚举 Playback（输出）设备，环回挂在默认播放设备上。
 func (r *MalgoRecorder) Probe() (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.initContext(); err != nil {
 		return false, err
 	}
-	infos, err := r.ctx.Devices(malgo.Capture)
+	devType := malgo.Capture
+	label := "输入"
+	if r.cfg.Mode == ModeSystem {
+		devType = malgo.Playback
+		label = "输出"
+	}
+	infos, err := r.ctx.Devices(devType)
 	if err != nil {
-		return false, fmt.Errorf("枚举音频输入设备失败: %w", err)
+		return false, fmt.Errorf("枚举音频%s设备失败: %w", label, err)
 	}
 	return len(infos) > 0, nil
 }
@@ -116,7 +156,13 @@ func (r *MalgoRecorder) Start() error {
 		return err
 	}
 
-	deviceCfg := malgo.DefaultDeviceConfig(malgo.Capture)
+	devType := malgo.Capture
+	if r.cfg.Mode == ModeSystem {
+		devType = malgo.Loopback
+	}
+	deviceCfg := malgo.DefaultDeviceConfig(devType)
+	// Loopback 与 Capture 在 malgo 里共用 Capture 字段（环回是"输出方向的回采"，
+	// 数据仍走 capture callback），所以下面这几行无需根据 mode 分叉。
 	deviceCfg.Capture.Format = malgo.FormatS16
 	deviceCfg.Capture.Channels = r.cfg.Channels
 	deviceCfg.SampleRate = r.cfg.SampleRate

@@ -42,11 +42,15 @@ const (
 	EventDocumentsChanged    = "documents-changed"   // 文档列表/启用状态变更
 )
 
-// HotkeyKind 区分录音热键与发送热键。
+// HotkeyKind 区分录音热键 / 发送热键 / 系统声音热键。
 const (
 	HotkeyKindRecord = "record"
 	HotkeyKindSend   = "send"
+	HotkeyKindSystem = "system" // 系统声音环回采集（如腾讯会议里面试官的语音）
 )
+
+// allHotkeyKinds 列出所有热键 kind，用于冲突检查时遍历"非自身"的其它热键。
+var allHotkeyKinds = []string{HotkeyKindRecord, HotkeyKindSend, HotkeyKindSystem}
 
 // App 是 Wails 后端协调器。
 type App struct {
@@ -57,9 +61,11 @@ type App struct {
 	loadErr error // 启动时配置加载失败的错误（在前端首次 GetConfig / 发送时返回）
 
 	// 各子模块。
-	recordHotkey *hotkey.Manager // 按住录音的全局热键
+	recordHotkey *hotkey.Manager // 按住录音的全局热键（麦克风）
 	sendHotkey   *hotkey.Manager // 一键发送的全局热键
+	systemHotkey *hotkey.Manager // 按住录音的全局热键（系统声音环回）
 	rec          recorder.Recorder
+	sysRec       recorder.Recorder // 系统声音环回 Recorder
 	asrCli       asr.Client
 	llmCli       *llm.Client
 	store        *conversation.Store
@@ -87,6 +93,7 @@ func (a *App) startup(ctx context.Context) {
 
 	a.store = conversation.NewStore()
 	a.rec = recorder.New(recorder.DefaultConfig())
+	a.sysRec = recorder.NewLoopback(recorder.DefaultConfig())
 
 	if err := a.loadConfig(); err != nil {
 		a.loadErr = err
@@ -110,6 +117,7 @@ func (a *App) startup(ctx context.Context) {
 	// 注册热键。失败不致命，UI 内的 🎤 按钮仍可用。
 	a.recordHotkey = hotkey.NewManager(a.onHotkeyPress, a.onHotkeyRelease)
 	a.sendHotkey = hotkey.NewManager(a.onSendHotkey, nil)
+	a.systemHotkey = hotkey.NewManager(a.onSystemHotkeyPress, a.onSystemHotkeyRelease)
 	a.applyHotkeyConfig()
 
 	// 初始化 ASR/LLM 客户端（基于当前配置）。
@@ -143,8 +151,14 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.sendHotkey != nil {
 		_ = a.sendHotkey.Unregister()
 	}
+	if a.systemHotkey != nil {
+		_ = a.systemHotkey.Unregister()
+	}
 	if a.rec != nil {
 		_ = a.rec.Close()
+	}
+	if a.sysRec != nil {
+		_ = a.sysRec.Close()
 	}
 	a.cancelLLM()
 }
@@ -254,6 +268,7 @@ func (a *App) applyHotkeyConfig() {
 	}
 	a.applySingleHotkey(a.recordHotkey, cfg.RecordHotkey, "录音")
 	a.applySingleHotkey(a.sendHotkey, cfg.SendHotkey, "发送")
+	a.applySingleHotkey(a.systemHotkey, cfg.SystemHotkey, "系统声音")
 }
 
 func (a *App) applySingleHotkey(mgr *hotkey.Manager, raw, label string) {
@@ -301,12 +316,22 @@ func (a *App) probeMicrophone() {
 
 func (a *App) onHotkeyPress() {
 	defer a.recoverPanic("hotkey-press")
-	a.startRecording()
+	a.startRecordingWith(a.rec, "麦克风")
 }
 
 func (a *App) onHotkeyRelease() {
 	defer a.recoverPanic("hotkey-release")
-	a.stopRecording()
+	a.stopRecordingWith(a.rec)
+}
+
+func (a *App) onSystemHotkeyPress() {
+	defer a.recoverPanic("hotkey-system-press")
+	a.startRecordingWith(a.sysRec, "系统声音")
+}
+
+func (a *App) onSystemHotkeyRelease() {
+	defer a.recoverPanic("hotkey-system-release")
+	a.stopRecordingWith(a.sysRec)
 }
 
 // onSendHotkey 由发送热键的 Press 触发；只通知前端，前端读输入框内容并调用 SendMessage。
@@ -319,11 +344,18 @@ func (a *App) onSendHotkey() {
 	a.emit(EventSendHotkeyPressed, nil)
 }
 
-// SimulatePress / SimulateRelease 由前端 🎤 按钮调用，行为与全局热键完全一致。
+// SimulatePress / SimulateRelease 由前端 🎤 按钮调用，行为与录音热键完全一致。
 func (a *App) SimulatePress()   { a.onHotkeyPress() }
 func (a *App) SimulateRelease() { a.onHotkeyRelease() }
 
-func (a *App) startRecording() {
+// startRecordingWith 启动指定 recorder 的一轮录音。label 用于错误信息（"麦克风"/"系统声音"）。
+//
+// 不同源的两个 recorder 共用 a.recording 与 a.asrSession 状态，因此一次只能
+// 录一路；如果另一路已经在录，本次请求会被忽略。
+func (a *App) startRecordingWith(rec recorder.Recorder, label string) {
+	if rec == nil {
+		return
+	}
 	cfg := a.currentConfig()
 	if cfg == nil {
 		a.emit(EventASRNotice, map[string]any{"message": "配置未加载，无法录音"})
@@ -334,16 +366,25 @@ func (a *App) startRecording() {
 		return
 	}
 
-	if err := a.rec.Start(); err != nil {
-		a.emit(EventASRError, map[string]any{"error": fmt.Sprintf("麦克风启动失败: %v", err)})
+	// 已经在录另一路时拒绝；避免两路 PCM 互相覆盖 ASR session。
+	if !a.recording.CompareAndSwap(false, true) {
 		return
 	}
-	a.recording.Store(true)
+
+	if err := rec.Start(); err != nil {
+		a.recording.Store(false)
+		a.emit(EventASRError, map[string]any{"error": fmt.Sprintf("%s启动失败: %v", label, err)})
+		return
+	}
 	a.emit(EventRecordingStarted, nil)
 }
 
-func (a *App) stopRecording() {
-	pcm, err := a.rec.Stop()
+// stopRecordingWith 结束指定 recorder 的当前录音并送 ASR。与 startRecordingWith 配对。
+func (a *App) stopRecordingWith(rec recorder.Recorder) {
+	if rec == nil {
+		return
+	}
+	pcm, err := rec.Stop()
 	a.recording.Store(false)
 	a.emit(EventRecordingStopped, nil)
 	if err != nil {
@@ -571,6 +612,7 @@ func (a *App) GetConfig() map[string]any {
 	v := cfg.MaskedView()
 	out["record_hotkey"] = v.RecordHotkey
 	out["send_hotkey"] = v.SendHotkey
+	out["system_hotkey"] = v.SystemHotkey
 	out["model"] = v.DeepSeek.Model
 	out["base_url"] = v.DeepSeek.BaseURL
 	out["thinking"] = v.DeepSeek.Thinking
@@ -599,7 +641,7 @@ func (a *App) UpdateHotkey(kind, raw string) error {
 	defer a.recoverPanic("update-hotkey")
 
 	switch kind {
-	case HotkeyKindRecord, HotkeyKindSend:
+	case HotkeyKindRecord, HotkeyKindSend, HotkeyKindSystem:
 	default:
 		return fmt.Errorf("未知的热键种类 %q", kind)
 	}
@@ -625,6 +667,8 @@ func (a *App) UpdateHotkey(kind, raw string) error {
 		cfg.RecordHotkey = raw
 	case HotkeyKindSend:
 		cfg.SendHotkey = raw
+	case HotkeyKindSystem:
+		cfg.SystemHotkey = raw
 	}
 
 	if err := cfg.Save(); err != nil {
@@ -639,37 +683,63 @@ func (a *App) UpdateHotkey(kind, raw string) error {
 	a.emit(EventHotkeyChanged, map[string]any{
 		"record_hotkey": cfg.RecordHotkey,
 		"send_hotkey":   cfg.SendHotkey,
+		"system_hotkey": cfg.SystemHotkey,
 	})
 	return nil
 }
 
-// validateHotkeyChange 校验新热键格式合法且不与另一个热键冲突。
+// hotkeyByKind 返回 cfg 中指定 kind 的原始快捷键字符串。
+// 未知 kind 返回 ""，由调用方按 "空即跳过冲突检查" 处理。
+func hotkeyByKind(cfg *config.Config, kind string) string {
+	switch kind {
+	case HotkeyKindRecord:
+		return cfg.RecordHotkey
+	case HotkeyKindSend:
+		return cfg.SendHotkey
+	case HotkeyKindSystem:
+		return cfg.SystemHotkey
+	default:
+		return ""
+	}
+}
+
+// validateHotkeyChange 校验新热键格式合法且不与任何其它已配置的热键冲突。
 //
 // 抽成纯函数便于测试：传入 cfg 表示当前配置（不会修改），kind/raw 是请求。
+// 遍历所有 kind 而非两两 if，新增热键种类时无需再扩 switch。
 func validateHotkeyChange(cfg *config.Config, kind, raw string) error {
 	newSpec, err := hotkey.ParseSpec(raw)
 	if err != nil {
 		return fmt.Errorf("快捷键 %q 解析失败: %v", raw, err)
 	}
-	var otherRaw string
-	switch kind {
-	case HotkeyKindRecord:
-		otherRaw = cfg.SendHotkey
-	case HotkeyKindSend:
-		otherRaw = cfg.RecordHotkey
-	default:
+
+	knownKind := false
+	for _, k := range allHotkeyKinds {
+		if k == kind {
+			knownKind = true
+			break
+		}
+	}
+	if !knownKind {
 		return fmt.Errorf("未知热键种类 %q", kind)
 	}
-	if strings.TrimSpace(otherRaw) == "" {
-		return nil
-	}
-	otherSpec, err := hotkey.ParseSpec(otherRaw)
-	if err != nil {
-		// 现存的另一个热键解析不出来——不视为冲突，让用户至少能改这个
-		return nil
-	}
-	if newSpec.Equal(otherSpec) {
-		return fmt.Errorf("快捷键 %s 已被另一个热键使用", newSpec)
+
+	for _, other := range allHotkeyKinds {
+		if other == kind {
+			continue
+		}
+		otherRaw := hotkeyByKind(cfg, other)
+		if strings.TrimSpace(otherRaw) == "" {
+			continue
+		}
+		otherSpec, err := hotkey.ParseSpec(otherRaw)
+		if err != nil {
+			// 已有热键解析不出来——不视为冲突，让用户至少能改其它的
+			continue
+		}
+		if newSpec.Equal(otherSpec) {
+			return fmt.Errorf("快捷键 %s 已被另一个热键使用", newSpec)
+		}
 	}
 	return nil
 }

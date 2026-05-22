@@ -24,7 +24,7 @@ func isolateEnv(t *testing.T) {
 	for _, k := range []string{
 		EnvTencentAppID, EnvTencentSecretID, EnvTencentSecretKey,
 		EnvDeepSeekAPIKey, EnvDeepSeekModel, EnvDeepSeekBaseURL,
-		EnvHotkey, EnvRecordHotkey, EnvSendHotkey,
+		EnvHotkey, EnvRecordHotkey, EnvSendHotkey, EnvSystemHotkey,
 	} {
 		old, had := os.LookupEnv(k)
 		os.Unsetenv(k)

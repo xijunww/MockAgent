@@ -20,7 +20,7 @@
 
     <main id="chat-list" class="chat-list">
       <div class="welcome">
-        按住快捷键 <kbd id="kbd-hotkey">F2</kbd> 录音并转文字，或在输入框按住 🎤 按钮。<br>
+        按住 <kbd id="kbd-hotkey">F2</kbd> 录自己说话；按住 <kbd id="kbd-system-hotkey">F3</kbd> 录系统正在播放的声音（面试官 / 会议）。<br>
         按 <kbd id="kbd-send-hotkey">F4</kbd> 直接发送当前输入框内容。
       </div>
     </main>
@@ -45,6 +45,7 @@
 
     <div id="config-menu" class="popup-menu hidden">
       <button data-action="edit-record-hotkey">修改录音热键 <span id="menu-record-hotkey" class="menu-kbd">F2</span></button>
+      <button data-action="edit-system-hotkey">修改系统声音热键 <span id="menu-system-hotkey" class="menu-kbd">F3</span></button>
       <button data-action="edit-send-hotkey">修改发送热键 <span id="menu-send-hotkey" class="menu-kbd">F4</span></button>
       <div class="menu-sep"></div>
       <button data-action="edit-system-prompt">修改系统提示词</button>

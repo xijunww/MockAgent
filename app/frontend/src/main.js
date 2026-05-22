@@ -25,6 +25,7 @@ const state = {
   statusResetTimer: null,
   recordHotkey: 'F2',
   sendHotkey: 'F4',
+  systemHotkey: 'F3',
 };
 
 // ==================== marked ====================
@@ -65,10 +66,12 @@ const statusText = $('status-text');
 const statusHotkey = $('status-hotkey');
 const kbdHotkey = $('kbd-hotkey');
 const kbdSendHotkey = $('kbd-send-hotkey');
+const kbdSystemHotkey = $('kbd-system-hotkey');
 const exportMenu = $('export-menu');
 const configMenu = $('config-menu');
 const menuRecordHotkey = $('menu-record-hotkey');
 const menuSendHotkey = $('menu-send-hotkey');
+const menuSystemHotkey = $('menu-system-hotkey');
 const hotkeyModal = $('hotkey-modal');
 const hotkeyModalTitle = $('hotkey-modal-title');
 const hotkeyCapture = $('hotkey-capture');
@@ -86,6 +89,7 @@ async function loadConfigStatus() {
     }
     if (cfg.record_hotkey) state.recordHotkey = cfg.record_hotkey;
     if (cfg.send_hotkey) state.sendHotkey = cfg.send_hotkey;
+    if (cfg.system_hotkey) state.systemHotkey = cfg.system_hotkey;
     refreshHotkeyDisplay();
 
     if (!cfg.api_key_set) {
@@ -103,9 +107,11 @@ async function loadConfigStatus() {
 function refreshHotkeyDisplay() {
   if (kbdHotkey) kbdHotkey.textContent = state.recordHotkey;
   if (kbdSendHotkey) kbdSendHotkey.textContent = state.sendHotkey;
+  if (kbdSystemHotkey) kbdSystemHotkey.textContent = state.systemHotkey;
   if (statusHotkey) statusHotkey.textContent = state.recordHotkey;
   if (menuRecordHotkey) menuRecordHotkey.textContent = state.recordHotkey;
   if (menuSendHotkey) menuSendHotkey.textContent = state.sendHotkey;
+  if (menuSystemHotkey) menuSystemHotkey.textContent = state.systemHotkey;
 }
 
 function showBanner(text, kind = 'error') {
@@ -190,6 +196,7 @@ EventsOn('config-status', (payload) => {
 EventsOn('hotkey-changed', (payload) => {
   if (payload?.record_hotkey) state.recordHotkey = payload.record_hotkey;
   if (payload?.send_hotkey) state.sendHotkey = payload.send_hotkey;
+  if (payload?.system_hotkey) state.systemHotkey = payload.system_hotkey;
   refreshHotkeyDisplay();
   setStatusIdle();
 });
@@ -209,7 +216,7 @@ EventsOn('conversation-cleared', () => {
   chatList.innerHTML = '';
   const welcome = document.createElement('div');
   welcome.className = 'welcome';
-  welcome.innerHTML = `按住快捷键 <kbd>${escapeHtml(state.recordHotkey)}</kbd> 录音并转文字，或在输入框按住 🎤 按钮。<br>按 <kbd>${escapeHtml(state.sendHotkey)}</kbd> 直接发送当前输入框内容。`;
+  welcome.innerHTML = `按住 <kbd>${escapeHtml(state.recordHotkey)}</kbd> 录自己说话；按住 <kbd>${escapeHtml(state.systemHotkey)}</kbd> 录系统正在播放的声音（面试官 / 会议）。<br>按 <kbd>${escapeHtml(state.sendHotkey)}</kbd> 直接发送当前输入框内容。`;
   chatList.appendChild(welcome);
 });
 
@@ -456,6 +463,8 @@ configMenu.querySelectorAll('button').forEach((btn) => {
       catch (e) { showBanner('重载失败: ' + (e?.message || e), 'error'); }
     } else if (action === 'edit-record-hotkey') {
       openHotkeyModal('record');
+    } else if (action === 'edit-system-hotkey') {
+      openHotkeyModal('system');
     } else if (action === 'edit-send-hotkey') {
       openHotkeyModal('send');
     } else if (action === 'edit-system-prompt') {
@@ -500,13 +509,16 @@ document.addEventListener('click', (e) => {
 });
 
 // ==================== 修改快捷键弹窗 ====================
-let hotkeyKind = null;          // 'record' | 'send'
+let hotkeyKind = null;          // 'record' | 'send' | 'system'
 let captured = null;            // { mods: Set<string>, key: string }
 let commitTimer = null;
 
+const HOTKEY_KIND_LABEL = { record: '录音', send: '发送', system: '系统声音' };
+
 function openHotkeyModal(kind) {
   hotkeyKind = kind;
-  hotkeyModalTitle.textContent = kind === 'record' ? '设置录音热键' : '设置发送热键';
+  const label = HOTKEY_KIND_LABEL[kind] || '快捷键';
+  hotkeyModalTitle.textContent = `设置${label}热键`;
   resetCapture();
   hotkeyModal.classList.remove('hidden');
   // 等下一帧让 DOM 出现后聚焦
@@ -627,9 +639,11 @@ async function commitHotkey() {
     return;
   }
   try {
-    await UpdateHotkey(hotkeyKind, spec);
+    const kind = hotkeyKind;
+    const label = HOTKEY_KIND_LABEL[kind] || '快捷键';
+    await UpdateHotkey(kind, spec);
     closeHotkeyModal();
-    flashStatus('notice', '✓', `${hotkeyKind === 'record' ? '录音' : '发送'}热键已更新为 ${spec}`, 1500);
+    flashStatus('notice', '✓', `${label}热键已更新为 ${spec}`, 1500);
   } catch (e) {
     showHotkeyError(String(e?.message || e || '保存失败'));
   }

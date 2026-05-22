@@ -14,6 +14,7 @@
   },
   "record_hotkey": "F2",
   "send_hotkey": "F4",
+  "system_hotkey": "F3",
   "audio": {
     "sample_rate": 16000,
     "channels": 1,
